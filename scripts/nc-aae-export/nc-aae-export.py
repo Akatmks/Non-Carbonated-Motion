@@ -38,6 +38,11 @@ bl_info = {
 
 import bpy
 
+# ("import name", "PyPI name")
+modules = (("numpy", "numpy"), ("scipy", "scipy"), ("matplotlib", "matplotlib"))
+
+is_dependencies_ready = False
+
 class NCAAEExportSettings(bpy.types.PropertyGroup):
     bl_label = "NCAAEExportSettings"
     bl_idname = "NCAAEExportSettings"
@@ -45,6 +50,12 @@ class NCAAEExportSettings(bpy.types.PropertyGroup):
     do_smoothing: bpy.props.BoolProperty(name="Smoothing",
                                          description="Perform final smoothing.\nDo not enable this option if you are tracking a shaking scene",
                                          default=False)
+    do_statistics: bpy.props.BoolProperty(name="Statistics",
+                                          description="Generate statistics images alongside AAE data",
+                                          default=False)
+    do_do_not_overwrite: bpy.props.BoolProperty(name="Do not overwrite",
+                                                description="Generate a unique file every time",
+                                                default=False)
     do_copy_to_clipboard: bpy.props.BoolProperty(name="Copy to clipboard",
                                                  description="Copy the result to clipboard",
                                                  default=False)
@@ -55,8 +66,11 @@ class NCAAEExportExport(bpy.types.Operator):
     bl_idname = "movieclip.nc_aae_export_export"
 
     def execute(self, context):
-        print(context.edit_movieclip.filepath)
+        _export(context.edit_movieclip, context.screen.NCAAEExportSettings)
         return {'FINISHED'}
+    
+    def _export(self, clip, settings):
+        print(clip.filepath)
 
 class NCAAEExport(bpy.types.Panel):
     bl_label = "NC AAE Export"
@@ -70,10 +84,15 @@ class NCAAEExport(bpy.types.Panel):
         layout.use_property_split = True
         layout.use_property_decorate = False
         
-        settings = context.edit_movieclip.NCAAEExportSettings
+        settings = context.screen.NCAAEExportSettings
         
-        layout.prop(settings, "do_smoothing")
-        layout.prop(settings, "do_copy_to_clipboard")
+        column = layout.column()
+        column.prop(settings, "do_smoothing")
+        column.prop(settings, "do_statistics")
+        
+        column = layout.column(heading="Result")
+        column.prop(settings, "do_do_not_overwrite")
+        column.prop(settings, "do_copy_to_clipboard")
         
         row = layout.row()
         row.scale_y = 2
@@ -85,7 +104,9 @@ classes = (NCAAEExportSettings,
 
 class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
     bl_label = "Install dependencies"
-    bl_description = "NC AAE Export requires additional packages to be installed.\nBy clicking this button, NC AAE Export will download and install pip and numpy into your Blender distribution"
+    bl_description = "NC AAE Export requires additional packages to be installed.\nBy clicking this button, NC AAE Export will download and install " + \
+                     (" and ".join([", ".join(["pip"] + [module[0] for module in modules[:-1]]), modules[-1][0]]) if len(modules) != 0 else "pip") + \
+                     " into your Blender distribution"
     bl_idname = "preference.nc_aae_export_register_install_dependencies"
     bl_options = {"REGISTER", "INTERNAL"}
 
@@ -103,14 +124,13 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
                     return {'FINISHED'}
         else:
             subprocess.run([sys.executable, "-m", "ensurepip"], check=True) # "blender": (2, 93, 0)
-            for module in modules:
-                if importlib.util.find_spec(module[0]) == None:
-                    subprocess.run([sys.executable, "-m", "pip", "install", module[1]], check=True)
-        
+            subprocess.run([sys.executable, "-m", "pip", "install"] + [module[1] for module in modules], check=True)
+
         global is_dependencies_ready      
         is_dependencies_ready = True
 
         register_main_classes()
+        unregister_register_class()
         
         self.report({"INFO"}, "Dependencies installed successfully.")
             
@@ -131,46 +151,33 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
             f.write("\ttry:\n")
 
             f.write("\t\tsubprocess.run([\"" + PurePath(sys.executable).as_posix() + "\", \"-m\", \"ensurepip\"], check=True)\n")
-            for module in modules:
-                if importlib.util.find_spec(module[0]) == None:
-                    f.write("\t\tsubprocess.run([\"" + PurePath(sys.executable).as_posix() + "\", \"-m\", \"pip\", \"install\", \"" + module[1] + "\"], check=True)\n")
+            f.write("\t\tsubprocess.run([\"" + PurePath(sys.executable).as_posix() + "\", \"-m\", \"pip\", \"install\", \"" + \
+                                        "\", \"".join([module[1] for module in modules]) + \
+                                        "\"], check=True)\n")
 
             f.write("\texcept:\n")
             f.write("\t\ttraceback.print_exc()\n")
             f.write("\t\tos.system(\"pause\")\n")
 
-        print("PowerShell -Command \"& {Start-Process \\\"" + sys.executable + "\\\" \\\"" + PurePath(f.name).as_posix() + "\\\" -Verb runAs -Wait}\"")
+        print("nc-aae-export: " + "PowerShell -Command \"& {Start-Process \\\"" + sys.executable + "\\\" \\\"" + PurePath(f.name).as_posix() + "\\\" -Verb runAs -Wait}\"")
         os.system("PowerShell -Command \"& {Start-Process \\\"" + sys.executable + "\\\" \\\"" + PurePath(f.name).as_posix() + "\\\" -Verb runAs -Wait}\"")
 
 class NCAAEExportRegisterPreferencePanel(bpy.types.AddonPreferences):
     bl_idname = __name__
     
     def draw(self, context):
-        if not is_dependencies_ready:
-            layout = self.layout
-            
-            layout.operator("preference.nc_aae_export_register_install_dependencies", icon="CONSOLE")
+        layout = self.layout
+        
+        layout.operator("preference.nc_aae_export_register_install_dependencies", icon="CONSOLE")
 
 register_classes = (NCAAEExportRegisterInstallDependencies,
                     NCAAEExportRegisterPreferencePanel)
-                    
-is_register_classes_registered = False
-
-# ("import name", "PyPI name")
-modules = (("scipy", "scipy"),)
-
-is_dependencies_ready = False
            
 def register():
     import importlib.util
     for module in modules:
         if importlib.util.find_spec(module[0]) == None:
-            for class_ in register_classes:
-                bpy.utils.register_class(class_)
-                
-            global is_register_classes_registered
-            is_register_casses_registered = True
-                
+            register_register_classes()
             return
     else:
         global is_dependencies_ready
@@ -182,30 +189,31 @@ def register_main_classes():
     for class_ in classes:
         bpy.utils.register_class(class_)
         
-    bpy.types.MovieClip.NCAAEExportSettings = bpy.props.PointerProperty(type=NCAAEExportSettings)
+    bpy.types.Screen.NCAAEExportSettings = bpy.props.PointerProperty(type=NCAAEExportSettings)
+
+def register_register_classes():
+    for class_ in register_classes:
+        bpy.utils.register_class(class_)
     
 def unregister():
-    if is_dependencies_ready:
-        del bpy.types.MovieClip.NCAAEExportSettings
+    if not is_dependencies_ready:
+        unregister_register_class()
+    else:
+        unregister_main_class()
+
+def unregister_main_class():
+    del bpy.types.Screen.NCAAEExportSettings
     
-    if is_register_classes_registered:
-        for class_ in register_classes:
-            bpy.utils.unregister_class(class_)
-    
-    if is_dependencies_ready:
-        for class_ in classes:
-            bpy.utils.unregister_class(class_)
+    for class_ in classes:
+        bpy.utils.unregister_class(class_)
+
+def unregister_register_class():
+    for class_ in register_classes:
+        bpy.utils.unregister_class(class_)
 
 if __name__ == "__main__":
     register()
 #    unregister() 
-
-
-
-
-
-
-
 
 
 
