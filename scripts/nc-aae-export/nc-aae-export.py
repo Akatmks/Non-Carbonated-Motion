@@ -37,19 +37,32 @@ bl_info = {
 }
 
 import bpy
+from enum import Enum
 
 # ("import name", "PyPI name")
 modules = (("numpy", "numpy"), ("scipy", "scipy"), ("matplotlib", "matplotlib"))
 
 is_dependencies_ready = False
 
+class FastFibonacci:
+    pass
+
 class NCAAEExportSettings(bpy.types.PropertyGroup):
     bl_label = "NCAAEExportSettings"
     bl_idname = "NCAAEExportSettings"
     
+    do_koma_uchi: bpy.props.BoolProperty(name="Enable",
+                                         description="Enable コマ打ち awareness.\nThis ensures the tracking data to be consistent with the コマ打ち of the clip.\nコマ打ち is also known as ones, twos, threes, fours, et cetera in English.\nDisable this option if you are tracking a non-anime clip",
+                                         default=True)
+    max_koma_uchi: bpy.props.IntProperty(name="Maxコマ打ち",
+                                         description="The maximum amount of コマ打ち expected.\nThe default value for a 23.976 fps anime is 4. Increase this value if you are working with a 60 fps clip",
+                                         default=4)
     do_smoothing: bpy.props.BoolProperty(name="Smoothing",
                                          description="Perform final smoothing.\nDo not enable this option if you are tracking a shaking scene",
                                          default=False)
+    do_predictive_smoothing: bpy.props.BoolProperty(name="Predictive smoothing",
+                                                    description="Enable predictive final smoothing.\nThis allows final smoothing to artificially construct new data when it suspects existing data to be imprecise or existing data is missing. It will be helpful in cases such as when the tracking target fades or blurs out. It will also improve overall precision, especially when the movement per frame is small",
+                                                    default=False)
     do_statistics: bpy.props.BoolProperty(name="Statistics",
                                           description="Generate statistics images alongside AAE data",
                                           default=False)
@@ -66,10 +79,254 @@ class NCAAEExportExport(bpy.types.Operator):
     bl_idname = "movieclip.nc_aae_export_export"
 
     def execute(self, context):
-        _export(context.edit_movieclip, context.screen.NCAAEExportSettings)
+        NCAAEExportExport._export(context.edit_movieclip, context.screen.NCAAEExportSettings)
         return {'FINISHED'}
     
-    def _export(self, clip, settings):
+    class _method(Enum):
+        UNDEFINED = -1
+        PURE_X_Y = 0
+        SCALE_X_Y = 1
+
+    @staticmethod
+    def _step_04_convert_tracking_markers_to_position_and_movement_array(clip):
+        """
+        Convert tracking markers to position and movement array. [Step 04]
+
+        Parameters
+        ----------
+        clip : bpy.types.MovieClip
+
+        Returns
+        -------
+        position_x : npt.NDArray[float32]
+        position_y : npt.NDArray[float32]
+        movement_x : npt.NDArray[float32]
+        movement_y : npt.NDArray[float32]
+            As explained below.
+
+        """
+        import numpy as np
+
+        # position array structure
+        # +---------+------------------------------------------+
+        # |         |           Track 1  Track 2  Track 3      |
+        # +---------+------------------------------------------+
+        # | Frame 1 | array([[  x,       x,       x        ],  |
+        # | Frame 2 |        [  x,       x,       x        ],  |
+        # | Frame 3 |        [  x,       x,       x        ],  |
+        # | Frame 4 |        [  x,       x,       x        ],  |
+        # | Frame 5 |        [  x,       x,       x        ]]) |
+        # +---------+------------------------------------------+
+        # There should be more calculations intraframe than interframe so
+        # position and movement arrays put the frame as the first axis.
+        position_x = np.empty([clip.frame_duration, len(clip.tracking.tracks)], dtype=np.float32)
+        position_x.fill(np.nan)
+        position_y = np.empty([clip.frame_duration, len(clip.tracking.tracks)], dtype=np.float32)
+        position_y.fill(np.nan)
+        
+        for i, track in enumerate(clip.tracking.tracks):
+            for marker in track.markers[1:]:
+                if marker.mute == False:
+                    position_x[marker.frame - 1][i], position_y[marker.frame - 1][i] = marker.co
+        
+        # movement array structure
+        # +-----------+------------------------------------------+
+        # |           |           Track 1  Track 2  Track 3      |
+        # +-----------+------------------------------------------+
+        # | Frame 1/2 | array([[  diff_x,  diff_x,  diff_x   ],  |
+        # | Frame 2/3 |        [  diff_x,  diff_x,  diff_x   ],  |
+        # | Frame 3/4 |        [  diff_x,  diff_x,  diff_x   ],  |
+        # | Frame 4/5 |        [  diff_x,  diff_x,  diff_x   ]]) |
+        # +-----------+                                          |
+        # | size -= 1 |                                          |
+        # +-----------+------------------------------------------+
+        return position_x, position_y, np.diff(position_x, axis=0), np.diff(position_y, axis=0)
+
+    @staticmethod
+    def _step_18_try_to_find_scale_origin_and_count_scale_koma_uchi(position_x, position_y, movement_x, movement_y, max_koma_uchi, do_statistics):
+        """
+        Pick random pairs of movements from the position array and try to find
+        the scale origin for every frame.
+        Decide if the scale method or the pure x/y method is suitable for the
+        clip. It will slice the clip into multiple sections if different
+        methods are suitable for difference sections of the clip.
+        It will also count the scale コマ打ち, while position コマ打ち will be
+        calculated in other functions.
+        [Step 18]
+
+        Parameters
+        ----------
+        position_x : npt.NDArray[float32]
+        position_y : npt.NDArray[float32]
+        movement_x : npt.NDArray[float32]
+        movement_y : npt.NDArray[float32]
+            The position and movement arrays likely coming from Step 04.
+        max_koma_uchi : int
+            NCAAEExportSettings.max_koma_uchi if NCAAEExportSettings.do_koma_uchi else 1
+        do_statistics : bool
+            NCAAEExportSettings.do_statistics.
+
+        Returns
+        -------
+        sections : list[tuple[int, NCAAEExportExport._method]]
+            A list of (frame, method)
+            This list only records the edges, or the frame when the method
+            changes from one to another.
+        scale_koma_uchi : list[tuple[int, int]]
+            A list of (frame, koma_uchi)
+            This list only records the edges.
+        origins_x : npt.NDArray[npt.NDArray[float64] or None]
+        origins_y : npt.NDArray[npt.NDArray[float64] or None]
+
+        """
+        import numpy as np
+        
+        frames = movement_x.shape[0]
+        origins_x # TODO
+        origins_y # TODO 
+        prev = NCAAEExportExport._method.UNDEFINED
+        for i in range(frames // 2, frames):
+            prev = _step_18__call_find_scale_origin(position_x[i], position_y[i], movement_x[i], movement_y[i], prev)
+        
+    @staticmethod
+    def _step_18__call_find_scale_origin(position_x, position_y, movement_x, movement_y, prev_method):
+        """
+        Parameters
+        ----------
+        position_x : npt.NDArray[float32]
+        position_y : npt.NDArray[float32]
+        movement_x : npt.NDArray[float32]
+        movement_y : npt.NDArray[float32]
+            1D array for the frame please.
+        prev_method: NCAAEExportExport._method
+        
+        Returns
+        -------
+        method : NCAAEExportExport._method
+        is_complete : bool
+            Complete set of origins.
+        origins_x : npt.NDArray[float64] or None
+        origins_y : npt.NDArray[float64] or None
+
+        """
+        available_indexes = np.where(~np.isnan(movement_x))
+        position_x_available = position_x[available_indexes]
+        position_y_available = position_y[available_indexes]
+        movement_x_available = movement_x[available_indexes]
+        movement_y_available = movement_y[available_indexes]
+        if prev_method == NCAAEExportExport._method.UNDEFINED:
+            is_found, is_complete, origins_x, origins_y = _step_18__find_scale_origin(position_x_available, position_y_available, movement_x_available, movement_y_available)
+        else:
+            is_found, is_complete, origins_x, origins_y = _step_18__find_scale_origin(position_x_available, position_y_available, movement_x_available, movement_y_available, 15)
+            if NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y != prev_method and not is_complete:
+                is_found, is_complete, origins_x, origins_y = _step_18__find_scale_origin(position_x_available, position_y_available, movement_x_available, movement_y_available)
+        
+        return NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y, is_complete, origins_x, origins_y
+        
+    @staticmethod
+    def _step_18__find_scale_origin(position_x, position_y, movement_x, movement_y, max_sample_size=0):
+        """
+        Parameters
+        ----------
+        position_x : npt.NDArray[float32]
+        position_y : npt.NDArray[float32]
+        movement_x : npt.NDArray[float32]
+        movement_y : npt.NDArray[float32]
+            1D array without NaN please.
+        max_sample_size: int
+            0 if you want to calculate through all the pairs.
+        
+        Returns
+        -------
+        is_found : bool
+            Scale origin found.
+        is_complete : bool
+        origins_x : npt.NDArray[float64]
+        origins_y : npt.NDArray[float64]
+
+        """
+        import numpy as np
+        from numpy import floor, sqrt
+
+        # +-------------+-----------------------------------------------------------------+
+        # |             | Track 1 (0)  Track 2 (1)  Track 3 (2)  Track 4 (3)  Track 5 (4) |
+        # +-------------+-----------------------------------------------------------------+
+        # | Track 1 (0) |                                                                 |
+        # | Track 2 (1) |           0                                                     |
+        # | Track 3 (2) |           1            2                                        |
+        # | Track 4 (3) |           3            4            5                           |
+        # | Track 5 (4) |           6            7            8            9              |
+        # +-------------+-----------------------------------------------------------------+
+        full_size = (position_x.shape[0] - 1) * position_x.shape[0] // 2
+        if max_sample_size != 0 and full_size > max_sameple_size:
+            choices = np.random.default_rng().choice(full_size, max_sample_size)
+            
+            is_complete = False
+        else:
+            # Using np.arange() and then running the array through sqrt() is
+            # 5 ~ 8 times faster than using np.empty() and two fors to assign
+            # values.
+            # This is Python.
+            choices = np.arange(full_size)
+            
+            is_complete = True
+        
+        first_indexes = floor(sqrt(2 * choice + 0.25) + 0.5)
+        second_indexes = choice - (first_indexes - 1) * first_indexes // 2
+
+        pizza = np.hstack((position_x[first_indexes].reshape([-1, 1]),
+                           position_y[first_indexes].reshape([-1, 1]),
+                           movement_x[first_indexes].reshape([-1, 1]),
+                           movement_y[first_indexes].reshape([-1, 1]),
+                           position_x[second_indexes].reshape([-1, 1]),
+                           position_y[second_indexes].reshape([-1, 1]),
+                           movement_x[second_indexes].reshape([-1, 1]),
+                           movement_y[second_indexes].reshape([-1, 1])))
+        
+        # XXX Understand this before continuing on anything else
+        def eat(slice):
+            return slice[0:1] + np.cross(slice[4:5] - slice[0:1], slice[6:7]) / np.cross(slice[2:3], slice[6:7]) * slice[2:3]
+
+        origins = np.apply_along_axis(eat, 0, pizza)
+
+
+
+        
+    @staticmethod
+    def _step_18__plot():
+        pass
+    
+    @staticmethod
+    def _step_2C_find_scale_origin_and_calculate_scale():
+        pass
+
+    @staticmethod
+    def _step_48_scale_origin_smoothing():
+        pass
+
+    @staticmethod
+    def _step_80_scale_smoothing():
+        pass
+
+    @staticmethod
+    def _step_E0_generate_pseudo_scale_point():
+        pass
+
+    @staticmethod
+    def _step_E2_export_for_scale():
+        pass
+
+    @staticmethod
+    def _export(clip, settings):
+        position_x, position_y, movement_x, movement_y = NCAAEExportExport._step_04_convert_tracking_markers_to_position_and_movement_array(clip)
+        print("position_x")
+        print(position_x)
+        print("position_y")
+        print(position_y)
+        print("movement_x")
+        print(movement_x)
+        print("movement_y")
+        print(movement_y)
         print(clip.filepath)
 
 class NCAAEExport(bpy.types.Panel):
@@ -86,8 +343,15 @@ class NCAAEExport(bpy.types.Panel):
         
         settings = context.screen.NCAAEExportSettings
         
-        column = layout.column()
+        column = layout.column(heading="コマ打ち")
+        column.prop(settings, "do_koma_uchi")
+        column.prop(settings, "max_koma_uchi")
+        
+        column = layout.column(heading="Functions")
         column.prop(settings, "do_smoothing")
+        row = column.row()
+        row.enabled = settings.do_smoothing
+        row.prop(settings, "do_predictive_smoothing")
         column.prop(settings, "do_statistics")
         
         column = layout.column(heading="Result")
@@ -123,7 +387,7 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
                 if importlib.util.find_spec(module[0]) == None:
                     return {'FINISHED'}
         else:
-            subprocess.run([sys.executable, "-m", "ensurepip"], check=True) # "blender": (2, 93, 0)
+            subprocess.run([sys.executable, "-m", "ensurepip"], check=True) # sys.executable requires Blender 2.93
             subprocess.run([sys.executable, "-m", "pip", "install"] + [module[1] for module in modules], check=True)
 
         global is_dependencies_ready      
@@ -214,18 +478,6 @@ def unregister_register_class():
 if __name__ == "__main__":
     register()
 #    unregister() 
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
