@@ -40,7 +40,7 @@ import bpy
 from enum import Enum
 
 # ("import name", "PyPI name")
-modules = (("numpy", "numpy"), ("scipy", "scipy"), ("matplotlib", "matplotlib"))
+modules = (("numpy", "1.9.0", "numpy>=1.9.0"), ("matplotlib", "", "matplotlib"))
 
 is_dependencies_ready = False
 
@@ -87,10 +87,110 @@ class NCAAEExportExport(bpy.types.Operator):
         PURE_X_Y = 0
         SCALE_X_Y = 1
 
-    @staticmethod
-    def _step_04_convert_tracking_markers_to_position_and_movement_array(clip):
+    class _triangular_number:
+        # https://en.wikipedia.org/wiki/Triangular_number
+        # +-------------+-----------------------------------------------------------------+
+        # |             | Track 1 (0)  Track 2 (1)  Track 3 (2)  Track 4 (3)  Track 5 (4) |
+        # +-------------+-----------------------------------------------------------------+
+        # | Track 1 (0) |                                                                 |
+        # | Track 2 (1) |           0                                                     |
+        # | Track 3 (2) |           1            2                                        |
+        # | Track 4 (3) |           3            4            5                           |
+        # | Track 5 (4) |           6            7            8            9              |
+        # +-------------+-----------------------------------------------------------------+
+
+        def __init__(self, original_size):
+            """
+            Parameters
+            ----------
+            original_size : int
+                The size of the array you want to pair from.
+
+            """
+            self.full_size = (original_size - 1) * original_size // 2
+
+        def get_complete_pairs(self):
+            """
+            Returns
+            ------
+            first_indexes : npt.NDArray[int]
+            second_indexes : npt.NDArray[int]
+            
+            """
+            import numpy as np
+            from numpy import floor, sqrt
+
+            # Using np.arange() and then running the array through sqrt() is
+            # 12 to 15 times faster than using np.empty() and two fors to
+            # assign values.
+            # This is Python.
+            choices = np.arange(self.full_size)
+
+            first_indexes = floor(sqrt(2 * choice + 0.25) + 0.5)
+            second_indexes = choice - (first_indexes - 1) * first_indexes // 2
+
+            return first_indexes, second_indexes
+
+        def get_sample_pairs(self, sample_size):
+            """
+            Parameters
+            ----------
+            sample_size : int
+
+            Returns
+            ------
+            first_indexes : npt.NDArray[int]
+            second_indexes : npt.NDArray[int]
+
+            """
+            import numpy as np
+            from numpy import floor, sqrt
+
+            if self._random == None:
+                self._init_random()
+
+            if sample_size <= self.full_size:
+                first_indexes, second_indexes = self.get_complete_pairs()
+            else:
+                choices = self._random.choice(self.full_size, sample_size)
+                first_indexes = floor(sqrt(2 * choice + 0.25) + 0.5)
+                second_indexes = choice - (first_indexes - 1) * first_indexes // 2
+
+            return first_indexes, second_indexes
+
+        full_size = -1
         """
-        Convert tracking markers to position and movement array. [Step 04]
+        full_size : int
+            The number of possible pairs.
+        """
+
+        def _init_random(self):
+            import numpy.random as npr
+
+            self._random = npr.default_rng()
+        
+        _random = None
+
+    @staticmethod
+    def _export(clip, settings):
+        ratio_x, ratio_y \
+            = NCAAEExportExport._step_03_calculate_aspect_ratio(clip)
+        position_x, position_y, movement_x, movement_y \
+            = NCAAEExportExport._step_04_convert_tracking_markers_to_position_and_movement_array(clip, ratio_x, ratio_y)
+        print("position_x")
+        print(position_x)
+        print("position_y")
+        print(position_y)
+        print("movement_x")
+        print(movement_x)
+        print("movement_y")
+        print(movement_y)
+        print(clip.filepath)
+
+    @staticmethod
+    def _step_03_calculate_aspect_ratio(clip):
+        """
+        Calculate aspect ratio. [Step 03]
 
         Parameters
         ----------
@@ -98,10 +198,39 @@ class NCAAEExportExport(bpy.types.Operator):
 
         Returns
         -------
-        position_x : npt.NDArray[float32]
-        position_y : npt.NDArray[float32]
-        movement_x : npt.NDArray[float32]
-        movement_y : npt.NDArray[float32]
+        ratio_x : float
+        ratio_y : float
+
+        """
+        ar = clip.size[0] / clip.size[1]
+        # As of 2021/2022
+        if ar < 1 / 1.35: # 9:16, 9:19 and higher videos
+            return 1 / 1.35, 1 / 1.35 / ar
+        elif ar < 1: # vertical aspect ratio from 1:1, 3:4, up to 1:1.35
+            return ar, 1
+        elif ar <= 1.81: # 1:1, 4:3, 16:9, up to 1920 x 1061
+            return ar, 1
+        else: # Ultrawide
+            return 1.81, 1.81 / ar
+
+    @staticmethod
+    def _step_04_convert_tracking_markers_to_position_and_movement_array(clip, ratio_x, ratio_y):
+        """
+        Convert tracking markers to position and movement array. [Step 04]
+
+        Parameters
+        ----------
+        clip : bpy.types.MovieClip
+        ratio_x : float
+        ratio_y : float
+            ratios likely from Step 03
+
+        Returns
+        -------
+        position_x : npt.NDArray[float64]
+        position_y : npt.NDArray[float64]
+        movement_x : npt.NDArray[float64]
+        movement_y : npt.NDArray[float64]
             As explained below.
 
         """
@@ -119,15 +248,27 @@ class NCAAEExportExport(bpy.types.Operator):
         # +---------+------------------------------------------+
         # There should be more calculations intraframe than interframe so
         # position and movement arrays put the frame as the first axis.
-        position_x = np.empty([clip.frame_duration, len(clip.tracking.tracks)], dtype=np.float32)
+        #
+        # The x and y value will have an aspect ratio of 1:1. However,
+        # regarding the range of x and y that is on the video, please refer to
+        # the conversion below.
+        # 
+        # Also, on the topic of precision, Blender only uses float32, while
+        # scipy explicitly uses float64 instead. In order to prevent any
+        # future problems, NC AAE Export uses float64 across the whole script.
+        position_x = np.empty([clip.frame_duration, len(clip.tracking.tracks)], dtype=np.float64)
         position_x.fill(np.nan)
-        position_y = np.empty([clip.frame_duration, len(clip.tracking.tracks)], dtype=np.float32)
+        position_y = np.empty([clip.frame_duration, len(clip.tracking.tracks)], dtype=np.float64)
         position_y.fill(np.nan)
         
+        # This will become the slowest step of all the procedures
         for i, track in enumerate(clip.tracking.tracks):
             for marker in track.markers[1:]:
                 if marker.mute == False:
                     position_x[marker.frame - 1][i], position_y[marker.frame - 1][i] = marker.co
+
+        position_x *= ratio_x
+        position_y *= ratio_y
         
         # movement array structure
         # +-----------+------------------------------------------+
@@ -143,7 +284,7 @@ class NCAAEExportExport(bpy.types.Operator):
         return position_x, position_y, np.diff(position_x, axis=0), np.diff(position_y, axis=0)
 
     @staticmethod
-    def _step_18_try_to_find_scale_origin_and_count_scale_koma_uchi(position_x, position_y, movement_x, movement_y, max_koma_uchi, do_statistics):
+    def _step_18_try_to_find_scale_origin_and_count_scale_koma_uchi(position_x, position_y, movement_x, movement_y, ratio_x, ratio_y, max_koma_uchi, do_plot):
         """
         Pick random pairs of movements from the position array and try to find
         the scale origin for every frame.
@@ -156,14 +297,16 @@ class NCAAEExportExport(bpy.types.Operator):
 
         Parameters
         ----------
-        position_x : npt.NDArray[float32]
-        position_y : npt.NDArray[float32]
-        movement_x : npt.NDArray[float32]
-        movement_y : npt.NDArray[float32]
+        position_x : npt.NDArray[float64]
+        position_y : npt.NDArray[float64]
+        movement_x : npt.NDArray[float64]
+        movement_y : npt.NDArray[float64]
             The position and movement arrays likely coming from Step 04.
+        ratio_x : float
+        ratio_y : float
         max_koma_uchi : int
-            NCAAEExportSettings.max_koma_uchi if NCAAEExportSettings.do_koma_uchi else 1
-        do_statistics : bool
+            NCAAEExportSettings.max_koma_uchi if NCAAEExportSettings.do_koma_uchi else 1.
+        do_plot : bool
             NCAAEExportSettings.do_statistics.
 
         Returns
@@ -186,19 +329,23 @@ class NCAAEExportExport(bpy.types.Operator):
         origins_y # TODO 
         prev = NCAAEExportExport._method.UNDEFINED
         for i in range(frames // 2, frames):
-            prev = _step_18__call_find_scale_origin(position_x[i], position_y[i], movement_x[i], movement_y[i], prev)
+            prev = _step_18__call_search_scale_origins(position_x[i], position_y[i], movement_x[i], movement_y[i], prev, ratio_x, ratio_y, do_plot)
         
     @staticmethod
-    def _step_18__call_find_scale_origin(position_x, position_y, movement_x, movement_y, prev_method):
+    def _step_18__call_search_scale_origins(position_x, position_y, movement_x, movement_y, prev_method, ratio_x, ratio_y, do_plot):
         """
         Parameters
         ----------
-        position_x : npt.NDArray[float32]
-        position_y : npt.NDArray[float32]
-        movement_x : npt.NDArray[float32]
-        movement_y : npt.NDArray[float32]
+        position_x : npt.NDArray[float64]
+        position_y : npt.NDArray[float64]
+        movement_x : npt.NDArray[float64]
+        movement_y : npt.NDArray[float64]
             1D array for the frame please.
         prev_method: NCAAEExportExport._method
+        ratio_x : float
+        ratio_y : float
+        do_plot : bool
+            NCAAEExportSettings.do_statistics.
         
         Returns
         -------
@@ -215,82 +362,116 @@ class NCAAEExportExport(bpy.types.Operator):
         movement_x_available = movement_x[available_indexes]
         movement_y_available = movement_y[available_indexes]
         if prev_method == NCAAEExportExport._method.UNDEFINED:
-            is_found, is_complete, origins_x, origins_y = _step_18__find_scale_origin(position_x_available, position_y_available, movement_x_available, movement_y_available)
+            origins_x, origins_y, is_complete = _step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
+            is_found = _step_18__check_scale_origins(origins_x, origins_y, do_plot)
         else:
-            is_found, is_complete, origins_x, origins_y = _step_18__find_scale_origin(position_x_available, position_y_available, movement_x_available, movement_y_available, 15)
+            origins_x, origins_y, is_complete = _step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available, 21)
+            is_found = _step_18__check_scale_origins(origins_x, origins_y, do_plot)
             if NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y != prev_method and not is_complete:
-                is_found, is_complete, origins_x, origins_y = _step_18__find_scale_origin(position_x_available, position_y_available, movement_x_available, movement_y_available)
-        
+                origins_x, origins_y, is_complete = _step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
+                is_found = _step_18__check_scale_origins(origins_x, origins_y, do_plot)
+
         return NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y, is_complete, origins_x, origins_y
         
     @staticmethod
-    def _step_18__find_scale_origin(position_x, position_y, movement_x, movement_y, max_sample_size=0):
+    def _step_18__calculate_scale_origins(position_x, position_y, movement_x, movement_y, max_sample_size=0):
         """
         Parameters
         ----------
-        position_x : npt.NDArray[float32]
-        position_y : npt.NDArray[float32]
-        movement_x : npt.NDArray[float32]
-        movement_y : npt.NDArray[float32]
+        position_x : npt.NDArray[float64]
+        position_y : npt.NDArray[float64]
+        movement_x : npt.NDArray[float64]
+        movement_y : npt.NDArray[float64]
             1D array without NaN please.
         max_sample_size: int
             0 if you want to calculate through all the pairs.
         
         Returns
         -------
-        is_found : bool
-            Scale origin found.
-        is_complete : bool
         origins_x : npt.NDArray[float64]
         origins_y : npt.NDArray[float64]
+        is_complete : bool
 
         """
         import numpy as np
-        from numpy import floor, sqrt
-
-        # +-------------+-----------------------------------------------------------------+
-        # |             | Track 1 (0)  Track 2 (1)  Track 3 (2)  Track 4 (3)  Track 5 (4) |
-        # +-------------+-----------------------------------------------------------------+
-        # | Track 1 (0) |                                                                 |
-        # | Track 2 (1) |           0                                                     |
-        # | Track 3 (2) |           1            2                                        |
-        # | Track 4 (3) |           3            4            5                           |
-        # | Track 5 (4) |           6            7            8            9              |
-        # +-------------+-----------------------------------------------------------------+
-        full_size = (position_x.shape[0] - 1) * position_x.shape[0] // 2
-        if max_sample_size != 0 and full_size > max_sameple_size:
-            choices = np.random.default_rng().choice(full_size, max_sample_size)
             
+        select = NCAAEExportExport._triangular_number(position_x.shape[0])
+        if max_sample_size != 0 and select.full_size > max_sample_size:
+            first_indexes, second_indexes = select.get_sample_pairs(max_sample_size)
             is_complete = False
         else:
-            # Using np.arange() and then running the array through sqrt() is
-            # 5 ~ 8 times faster than using np.empty() and two fors to assign
-            # values.
-            # This is Python.
-            choices = np.arange(full_size)
-            
-            is_complete = True
-        
-        first_indexes = floor(sqrt(2 * choice + 0.25) + 0.5)
-        second_indexes = choice - (first_indexes - 1) * first_indexes // 2
+            first_indexes, second_indexes = select.get_complete_pairs()
 
-        pizza = np.hstack((position_x[first_indexes].reshape([-1, 1]),
-                           position_y[first_indexes].reshape([-1, 1]),
-                           movement_x[first_indexes].reshape([-1, 1]),
-                           movement_y[first_indexes].reshape([-1, 1]),
-                           position_x[second_indexes].reshape([-1, 1]),
-                           position_y[second_indexes].reshape([-1, 1]),
-                           movement_x[second_indexes].reshape([-1, 1]),
-                           movement_y[second_indexes].reshape([-1, 1])))
+        pizza = np.column_stack((position_x[first_indexes],
+                                 position_y[first_indexes],
+                                 movement_x[first_indexes],
+                                 movement_y[first_indexes],
+                                 position_x[second_indexes],
+                                 position_y[second_indexes],
+                                 movement_x[second_indexes],
+                                 movement_y[second_indexes]))
         
-        # XXX Understand this before continuing on anything else
+        # https://stackoverflow.com/questions/563198/
         def eat(slice):
-            return slice[0:1] + np.cross(slice[4:5] - slice[0:1], slice[6:7]) / np.cross(slice[2:3], slice[6:7]) * slice[2:3]
+            if (j := np.cross(slice[2:3], slice[6:7])) == 0: # := requires Python 3.8 (Blender 2.93)
+                return np.array([np.nan, np.nan], dtype=np.float64)
+            else:
+                return slice[0:1] + np.cross(slice[4:5] - slice[0:1], slice[6:7]) / j * slice[2:3]
 
         origins = np.apply_along_axis(eat, 0, pizza)
+        #                                  ^ This is the slice angle, not the amount of pizza.
+        
+        return origins[:, 0], origins[:, 1], is_complete
 
+    @staticmethod
+    def _step_18__check_scale_origins(origins_x, origins_y, do_plot):
+        """
+        Parameters
+        ----------
+        origins_x : npt.NDArray[float64]
+        origins_y : npt.NDArray[float64]
+            1D array including the nans.
+        do_plot : bool
+            NCAAEExportSettings.do_statistics.
+        
+        Returns
+        -------
+        found : bool
 
+        """
+        import numpy as np
 
+        nans = np.count_nonzero(np.isnan(origins_x))
+
+        # https://en.wikipedia.org/wiki/Interquartile_range
+        if not do_plot:
+            # If 50% of the markers doesn't work, then 75% of the origins will
+            # have problems. Hope this Q1 = 35, Q3 = 65 setting will work.
+            scalars_x = np.nanpercentile(origins_x, [35, 65]) # np.nanpercentile requires numpy version 1.9.0
+            scalars_y = np.nanpercentile(origins_y, [35, 65])
+        else: # do_plot
+            scalars_x = np.nanpercentile(origins_x, [35, 65, 30, 70])
+            scalars_y = np.nanpercentile(origins_y, [35, 65, 30, 70])
+
+        scalars_x[1] - scalars_x[0] + nans / origins_x.shape[0] 
+
+        mean_x = np.mean(origins_x)
+        mean_y = np.mean(origins_y)        
+
+        import scipy.spatial.distance as distance
+        # Take the number out and np.array() is 4 times or so faster than any
+        # kinds of stacks
+        distances = distance.cdist(np.column_stack((origins_x, origins_y)),
+                                   np.array([[mean_x[0], mean_y[0]]]))
+
+        # Variance is not what I want
+        # A single element being very off increases the variance much more than a dozen slightly spreaded-out elements.
+        variance_x = np.var(origins_x)
+        variance_y = np.var(origins_y)
+
+        np.count_nonzero(np.isnan(origins_x))
+
+        return
         
     @staticmethod
     def _step_18__plot():
@@ -315,19 +496,6 @@ class NCAAEExportExport(bpy.types.Operator):
     @staticmethod
     def _step_E2_export_for_scale():
         pass
-
-    @staticmethod
-    def _export(clip, settings):
-        position_x, position_y, movement_x, movement_y = NCAAEExportExport._step_04_convert_tracking_markers_to_position_and_movement_array(clip)
-        print("position_x")
-        print(position_x)
-        print("position_y")
-        print(position_y)
-        print("movement_x")
-        print(movement_x)
-        print("movement_y")
-        print(movement_y)
-        print(clip.filepath)
 
 class NCAAEExport(bpy.types.Panel):
     bl_label = "NC AAE Export"
@@ -369,7 +537,7 @@ classes = (NCAAEExportSettings,
 class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
     bl_label = "Install dependencies"
     bl_description = "NC AAE Export requires additional packages to be installed.\nBy clicking this button, NC AAE Export will download and install " + \
-                     (" and ".join([", ".join(["pip"] + [module[0] for module in modules[:-1]]), modules[-1][0]]) if len(modules) != 0 else "pip") + \
+                     (" and ".join([", ".join(["pip"] + [module[2] for module in modules[:-1]]), modules[-1][2]]) if len(modules) != 0 else "pip") + \
                      " into your Blender distribution"
     bl_idname = "preference.nc_aae_export_register_install_dependencies"
     bl_options = {"REGISTER", "INTERNAL"}
@@ -388,7 +556,7 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
                     return {'FINISHED'}
         else:
             subprocess.run([sys.executable, "-m", "ensurepip"], check=True) # sys.executable requires Blender 2.93
-            subprocess.run([sys.executable, "-m", "pip", "install"] + [module[1] for module in modules], check=True)
+            subprocess.run([sys.executable, "-m", "pip", "install"] + [module[2] for module in modules], check=True)
 
         global is_dependencies_ready      
         is_dependencies_ready = True
@@ -416,7 +584,7 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
 
             f.write("\t\tsubprocess.run([\"" + PurePath(sys.executable).as_posix() + "\", \"-m\", \"ensurepip\"], check=True)\n")
             f.write("\t\tsubprocess.run([\"" + PurePath(sys.executable).as_posix() + "\", \"-m\", \"pip\", \"install\", \"" + \
-                                        "\", \"".join([module[1] for module in modules]) + \
+                                        "\", \"".join([module[2] for module in modules]) + \
                                         "\"], check=True)\n")
 
             f.write("\texcept:\n")
@@ -439,10 +607,27 @@ register_classes = (NCAAEExportRegisterInstallDependencies,
            
 def register():
     import importlib.util
+    if importlib.util.find_spec("packaging") != None:
+        import packaging.version
+    elif importlib.util.find_spec("distutils") != None: # distutils deprecated in Python 3.12
+        import distutils.version
+    
     for module in modules:
         if importlib.util.find_spec(module[0]) == None:
             register_register_classes()
             return
+
+        if module[1]:
+            exec("import " + module[0])
+            module_version = eval(module[0] + ".__version__")
+            if "packaging" in locals():
+                if packaging.version.parse(module_version) < packaging.version.parse(module[1]):
+                    register_register_classes()
+                    return
+            elif "distutils" in locals(): # distutils deprecated in Python 3.12
+                if distutils.version.LooseVersion(module_version) < distutils.version.LooseVersion(module[1]):
+                    register_register_classes()
+                    return
     else:
         global is_dependencies_ready
         is_dependencies_ready = True
