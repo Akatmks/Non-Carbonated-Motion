@@ -1,6 +1,23 @@
 # nc-aae-export.py
 # Copyright (c) Akatsumekusa
 
+#      _______  ________  ________  ________  ________  ________                                   
+#    //   /   \/    /   \/        \/       / /        \/        \                                  
+#   //        /         /         /        \/         /         /                                  
+#  /         /         /         /         /        _/        _/                                   
+#  \__/_____/\________/\__/__/__/\________/\________/\____/___/                                    
+#      _______  ________  ________  ________  ________  ________   ________  ________  ________    
+#    //       \/        \/    /   \/    /   \/        \/    /   \ /        \/    /   \/        \   
+#   //        /         /         /         /         /         /_/       //         /       __/   
+#  /       --/        _/         /         /       --/         //         /         /       / /    
+#  \________/\____/___/\________/\__/_____/\________/\___/____/ \________/\__/_____/\________/     
+#     _______   _______    _______        _______  ________  ________  ________  ________  ________ 
+#    /       \\/       \\//       \     //       \/    /   \/        \/        \/        \/        \
+#   /        //        ///        /    //        /_       _/         /         /         /        _/
+#  /         /         /        _/    /        _/         /       __/         /        _//       /  
+#  \___/____/\___/____/\________/     \________/\___/____/\______/  \________/\____/___/ \______/   
+# 
+
 # ---------------------------------------------------------------------
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
@@ -44,9 +61,6 @@ modules = (("numpy", "1.9.0", "numpy>=1.9.0"), ("matplotlib", "", "matplotlib"))
 
 is_dependencies_ready = False
 
-class FastFibonacci:
-    pass
-
 class NCAAEExportSettings(bpy.types.PropertyGroup):
     bl_label = "NCAAEExportSettings"
     bl_idname = "NCAAEExportSettings"
@@ -75,7 +89,7 @@ class NCAAEExportSettings(bpy.types.PropertyGroup):
 
 class NCAAEExportExport(bpy.types.Operator):
     bl_label = "Export"
-    bl_description = "Export AAE data as txt file next to the original movie clip"
+    bl_description = "Export AAE data as txt files next to the original movie clip"
     bl_idname = "movieclip.nc_aae_export_export"
 
     def execute(self, context):
@@ -264,7 +278,7 @@ class NCAAEExportExport(bpy.types.Operator):
         # This will become the slowest step of all the procedures
         for i, track in enumerate(clip.tracking.tracks):
             for marker in track.markers[1:]:
-                if marker.mute == False:
+                if not marker.mute:
                     position_x[marker.frame - 1][i], position_y[marker.frame - 1][i] = marker.co
 
         position_x *= ratio_x
@@ -329,10 +343,16 @@ class NCAAEExportExport(bpy.types.Operator):
         origins_y # TODO 
         prev = NCAAEExportExport._method.UNDEFINED
         for i in range(frames // 2, frames):
-            prev = _step_18__call_search_scale_origins(position_x[i], position_y[i], movement_x[i], movement_y[i], prev, ratio_x, ratio_y, do_plot)
+            prev, origins_x, origins_y, is_complete, nan_percent, scalars_x, scalars_y \
+                = NCAAEExportExport._step_18__call_search_scale_origins(position_x[i], position_y[i], movement_x[i], movement_y[i], prev, do_plot)
+
+
+        # scale_koma_uchi is for return, just return the current stats
+        # TODO finish this for
+        # TODO matplotlib
         
     @staticmethod
-    def _step_18__call_search_scale_origins(position_x, position_y, movement_x, movement_y, prev_method, ratio_x, ratio_y, do_plot):
+    def _step_18__call_search_scale_origins(position_x, position_y, movement_x, movement_y, prev_method, do_plot):
         """
         Parameters
         ----------
@@ -341,19 +361,22 @@ class NCAAEExportExport(bpy.types.Operator):
         movement_x : npt.NDArray[float64]
         movement_y : npt.NDArray[float64]
             1D array for the frame please.
-        prev_method: NCAAEExportExport._method
-        ratio_x : float
-        ratio_y : float
+        prev_method : NCAAEExportExport._method
         do_plot : bool
             NCAAEExportSettings.do_statistics.
         
         Returns
         -------
         method : NCAAEExportExport._method
+        origins_x : npt.NDArray[float64]
+        origins_y : npt.NDArray[float64]
         is_complete : bool
             Complete set of origins.
-        origins_x : npt.NDArray[float64] or None
-        origins_y : npt.NDArray[float64] or None
+        nan_percent : float or None
+            None if not NCAAEExportSettings.do_statistics.
+        scalars_x : npt.NDArray[float64] or None
+        scalars_y : npt.NDArray[float64] or None
+            [35, 65, 30, 70]. None if not NCAAEExportSettings.do_statistics.
 
         """
         available_indexes = np.where(~np.isnan(movement_x))
@@ -361,17 +384,24 @@ class NCAAEExportExport(bpy.types.Operator):
         position_y_available = position_y[available_indexes]
         movement_x_available = movement_x[available_indexes]
         movement_y_available = movement_y[available_indexes]
-        if prev_method == NCAAEExportExport._method.UNDEFINED:
-            origins_x, origins_y, is_complete = _step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
-            is_found = _step_18__check_scale_origins(origins_x, origins_y, do_plot)
-        else:
-            origins_x, origins_y, is_complete = _step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available, 21)
-            is_found = _step_18__check_scale_origins(origins_x, origins_y, do_plot)
-            if NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y != prev_method and not is_complete:
-                origins_x, origins_y, is_complete = _step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
-                is_found = _step_18__check_scale_origins(origins_x, origins_y, do_plot)
 
-        return NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y, is_complete, origins_x, origins_y
+        if prev_method == NCAAEExportExport._method.UNDEFINED:
+            origins_x, origins_y, is_complete \
+                = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
+            is_found, nan_percent, scalars_x, scalars_y \
+                = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
+        else:
+            origins_x, origins_y, is_complete \
+                = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available, 21)
+            is_found, nan_percent, scalars_x, scalars_y \
+                = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
+            if NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y != prev_method and not is_complete:
+                origins_x, origins_y, is_complete \
+                    = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
+                is_found, nan_percent, scalars_x, scalars_y \
+                    = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
+
+        return NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y, origins_x, origins_y, is_complete, nan_percent, scalars_x, scalars_y
         
     @staticmethod
     def _step_18__calculate_scale_origins(position_x, position_y, movement_x, movement_y, max_sample_size=0):
@@ -436,12 +466,18 @@ class NCAAEExportExport(bpy.types.Operator):
         
         Returns
         -------
-        found : bool
+        is_found : bool
+        nan_percent : float or None
+            None if not NCAAEExportSettings.do_statistics.
+        scalars_x : npt.NDArray[float64] or None
+        scalars_y : npt.NDArray[float64] or None
+            [35, 65, 30, 70]. None if not NCAAEExportSettings.do_statistics.
 
         """
         import numpy as np
 
         nans = np.count_nonzero(np.isnan(origins_x))
+        nan = nans / origins_x.shape[0]
 
         # https://en.wikipedia.org/wiki/Interquartile_range
         if not do_plot:
@@ -453,25 +489,14 @@ class NCAAEExportExport(bpy.types.Operator):
             scalars_x = np.nanpercentile(origins_x, [35, 65, 30, 70])
             scalars_y = np.nanpercentile(origins_y, [35, 65, 30, 70])
 
-        scalars_x[1] - scalars_x[0] + nans / origins_x.shape[0] 
-
-        mean_x = np.mean(origins_x)
-        mean_y = np.mean(origins_y)        
-
-        import scipy.spatial.distance as distance
-        # Take the number out and np.array() is 4 times or so faster than any
-        # kinds of stacks
-        distances = distance.cdist(np.column_stack((origins_x, origins_y)),
-                                   np.array([[mean_x[0], mean_y[0]]]))
-
-        # Variance is not what I want
-        # A single element being very off increases the variance much more than a dozen slightly spreaded-out elements.
-        variance_x = np.var(origins_x)
-        variance_y = np.var(origins_y)
-
-        np.count_nonzero(np.isnan(origins_x))
-
-        return
+        is_found = scalars_x[1] - scalars_x[0] < 0.20 and \
+                   scalars_y[1] - scalars_y[0] < 0.20 and \
+                   nan < 0.25
+                
+        if not do_plot:
+            return is_found, None, None, None
+        else: # do_plot
+            return is_found, nan, scalars_x, scalars_y
         
     @staticmethod
     def _step_18__plot():
@@ -529,6 +554,10 @@ class NCAAEExport(bpy.types.Panel):
         row = layout.row()
         row.scale_y = 2
         row.operator("movieclip.nc_aae_export_export")
+
+    @classmethod
+    def poll(cls, context):
+        return context.edit_movieclip is not None
 
 classes = (NCAAEExportSettings,
            NCAAEExportExport,

@@ -21,4 +21,4 @@ Number Crunching Motion supports:
 * `\fscx` and `\fscy`  
 * `\frz` and `\fax`  
 
-Akatsumekusa is looking for algorithms to archive `\frx`, `\fry` and `\frz`.  
+Akatsumekusa is looking for algorithms to achieve `\frx`, `\fry` and `\frz`.  
