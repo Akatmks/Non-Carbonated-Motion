@@ -41,7 +41,7 @@
 # ---------------------------------------------------------------------
 
 bl_info = {
-    "name": "Number Crunching AAE Export",
+    "name": "Non Carbonated AAE Export",
     "description": "Export Aegisub-Motion compatible AAE data to file",
     "author": "Akatsumekusa",
     "support": "COMMUNITY",
@@ -49,15 +49,15 @@ bl_info = {
     "blender": (2, 93, 0),
     "location": "Clip Editor > Tools > Solve > NC AAE Export",
     "warning": "",
-    "doc_url": "https://github.com/Akatmks/Number-Crunching-Motion",
-    "tracker_url": "https://github.com/Akatmks/Number-Crunching-Motion/issues"
+    "doc_url": "https://github.com/Akatmks/Non-Carbonated-Motion",
+    "tracker_url": "https://github.com/Akatmks/Non-Carbonated-Motion/issues"
 }
 
 import bpy
 from enum import Enum
 
-# ("import name", "PyPI name")
-modules = (("numpy", "1.9.0", "numpy>=1.9.0"), ("matplotlib", "", "matplotlib"))
+# ("import name", "PyPI name", "minimum version")
+modules = (("numpy", "numpy", "1.9.0"), ("matplotlib", "matplotlib", ""), ("sklearn", "scikit-learn", ""))
 
 is_dependencies_ready = False
 
@@ -566,7 +566,7 @@ classes = (NCAAEExportSettings,
 class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
     bl_label = "Install dependencies"
     bl_description = "NC AAE Export requires additional packages to be installed.\nBy clicking this button, NC AAE Export will download and install " + \
-                     (" and ".join([", ".join(["pip"] + [module[2] for module in modules[:-1]]), modules[-1][2]]) if len(modules) != 0 else "pip") + \
+                     (" and ".join([", ".join(["pip"] + [module[1] for module in modules[:-1]]), modules[-1][1]]) if len(modules) != 0 else "pip") + \
                      " into your Blender distribution"
     bl_idname = "preference.nc_aae_export_register_install_dependencies"
     bl_options = {"REGISTER", "INTERNAL"}
@@ -585,7 +585,7 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
                     return {'FINISHED'}
         else:
             subprocess.run([sys.executable, "-m", "ensurepip"], check=True) # sys.executable requires Blender 2.93
-            subprocess.run([sys.executable, "-m", "pip", "install"] + [module[2] for module in modules], check=True)
+            subprocess.run([sys.executable, "-m", "pip", "install"] + [module[1] + ">=" + module[2] if module[2] != "" else module[1] for module in modules], check=True)
 
         global is_dependencies_ready      
         is_dependencies_ready = True
@@ -613,7 +613,7 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
 
             f.write("\t\tsubprocess.run([\"" + PurePath(sys.executable).as_posix() + "\", \"-m\", \"ensurepip\"], check=True)\n")
             f.write("\t\tsubprocess.run([\"" + PurePath(sys.executable).as_posix() + "\", \"-m\", \"pip\", \"install\", \"" + \
-                                        "\", \"".join([module[2] for module in modules]) + \
+                                        "\", \"".join([module[1] + ">=" + module[2] if module[2] != "" else module[1] for module in modules]) + \
                                         "\"], check=True)\n")
 
             f.write("\texcept:\n")
@@ -650,11 +650,11 @@ def register():
             exec("import " + module[0])
             module_version = eval(module[0] + ".__version__")
             if "packaging" in locals():
-                if packaging.version.parse(module_version) < packaging.version.parse(module[1]):
+                if packaging.version.parse(module_version) < packaging.version.parse(module[2]):
                     register_register_classes()
                     return
             elif "distutils" in locals(): # distutils deprecated in Python 3.12
-                if distutils.version.LooseVersion(module_version) < distutils.version.LooseVersion(module[1]):
+                if distutils.version.LooseVersion(module_version) < distutils.version.LooseVersion(module[2]):
                     register_register_classes()
                     return
     else:

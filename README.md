@@ -1,24 +1,21 @@
 ## nc-aae-export.py *[Not ready]*
 
-Number Crunching AAE Export is an [Aegisub-Motion](https://github.com/TypesettingTools/Aegisub-Motion/) compatible script to export tracking data from Blender.  
+Non Carbonated AAE Export is an [Aegisub-Motion](https://github.com/TypesettingTools/Aegisub-Motion/) compatible script to export tracking data from Blender.  
 
-Instead of using a single tracking marker or plane, Number Crunching Motion uses as many markers as your computer could possibly handle. It will check the markers fbf and remove the markers that are probably not working very well. Then it will take the average of all the remaining markers and apply it to the subtitle. That's where the „Number Crunching“ in Number Crunching Motion comes from.  
+Instead of meticulously creating and tracking a single marker or plane track, Non Carbonated AAE Export accepts as many markers as you can possibly put on the screen. With the power of machine learning, Non Carbonated AAE Export can automatically deal with tracking errors and inaccuracies, merge all the tracks together for the best precision and output tracking data for Aegisub-Motion effortlessly, mostly.
 
-Number Crunching AAE Export supports:  
+Non Carbonated AAE Export supports:  
 * `\pos`  
 * `\fscx` and `\fscy`  
 
-## aka.NumberCrunchingMotion.lua & nc-mo-export.py *[Not ready]*
+Akatsumekusa is looking for potential methods to support `\frx`, `\fry` and `\frz`.  
 
-Number Crunching Motion is an Aegisub automation script that takes raw tracking data from Blender and applies it to the subtitle in a similar manner as [Aegisub-Motion](https://github.com/TypesettingTools/Aegisub-Motion/).  
+## aka.NonCarbonatedMotion.lua & nc-mo.py *[Not ready]*
 
-Instead of using a single tracking marker or plane, Number Crunching Motion uses as many markers as your computer could possibly handle. It will check the markers fbf and remove the markers that are probably not working very well. Then it will take the average of all the remaining markers and apply it to the subtitle. That's where the „Number Crunching“ in Number Crunching Motion comes from.  
+Non Carbonated Motion is a Python-based program with Aegisub interface that takes raw tracking data from Blender and applies it to the subtitle in a similar manner as [Aegisub-Motion](https://github.com/TypesettingTools/Aegisub-Motion/).  
 
-*Number Crunching Motion will be looking for maintainers to help build the binaries.*  
-
-Number Crunching Motion supports: 
+Non Carbonated Motion supports: 
 * `\pos`  
 * `\fscx` and `\fscy`  
+* `\frx`, `\fry` and `\frz`  
 * `\frz` and `\fax`  
-
-Akatsumekusa is looking for algorithms to achieve `\frx`, `\fry` and `\frz`.  
