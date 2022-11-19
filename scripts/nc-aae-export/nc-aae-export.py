@@ -66,7 +66,7 @@ import bpy
 from enum import Enum
 
 # ("import name", "PyPI name", "minimum version")
-modules = (("numpy", "numpy", "1.9.0"), ("matplotlib", "matplotlib", ""), ("sklearn", "scikit-learn", ""))
+modules = (("numpy", "numpy", "1.9.0"), ("matplotlib", "matplotlib", ""), ("sklearn", "scikit-learn", "0.22"))
 
 is_dependencies_ready = False
 
@@ -193,19 +193,16 @@ class NCAAEExportExport(bpy.types.Operator):
         clip = context.edit_movieclip
         settings = context.screen.NCAAEExportSettings
 
-        ratio_x, ratio_y \
+        ratio \
             = NCAAEExportExport._step_03_calculate_aspect_ratio( \
                   clip)
-        position_x, position_y, movement_x, movement_y \
-            = NCAAEExportExport._step_04_convert_tracking_markers_to_position_and_movement_array( \
-                  clip, ratio_x, ratio_y)
+        position, movement \
+            = NCAAEExportExport._step_04_create_position_and_movement_array_from_tracking_markers( \
+                  clip, ratio)
         
-        reduced_position_x, reduced_position_y, \
-        reduced_movement_x, reduced_movement_y, \
-        origin_x, origin_y, \
-        origin_estimator \
-            = NCAAEExportExport._step_08_reduce_position_and_movement_array_and_calculate_origin_array_and_origin_estimator( \
-                  position_x, position_y, movement_x, movement_y)
+        reduced_position, reduced_movement, origin, filtered_origin \
+            = NCAAEExportExport._step_08_reduce_position_and_movement_array_and_calculate_origin_array_and_filtered_origin_array( \
+                  position, movement)
 
         print(clip.filepath)
         
@@ -222,39 +219,35 @@ class NCAAEExportExport(bpy.types.Operator):
 
         Returns
         -------
-        ratio_x : float
-        ratio_y : float
+        ratio : tuple[float]
 
         """
         ar = clip.size[0] / clip.size[1]
         # As of 2021/2022
         if ar < 1 / 1.35: # 9:16, 9:19 and higher videos
-            return 1 / 1.35, 1 / 1.35 / ar
+            return (1 / 1.35, 1 / 1.35 / ar)
         elif ar < 1: # vertical videos from 1:1, 3:4, up to 1:1.35
-            return ar, 1
+            return (ar, 1)
         elif ar <= 1.81: # 1:1, 4:3, 16:9, up to 1920 x 1061
-            return ar, 1
+            return (ar, 1)
         else: # Ultrawide
-            return 1.81, 1.81 / ar
+            return (1.81, 1.81 / ar)
 
     @staticmethod
-    def _step_04_convert_tracking_markers_to_position_and_movement_array(clip, ratio_x, ratio_y):
+    def _step_04_create_position_and_movement_array_from_tracking_markers(clip, ratio):
         """
-        Convert tracking markers to position and movement array. [Step 04]
+        Create position and movement array from tracking markers. [Step 04]
 
         Parameters
         ----------
         clip : bpy.types.MovieClip
-        ratio_x : float
-        ratio_y : float
-            ratios likely from Step 03
+        ratio : tuple[float]
+            ratio likely from Step 03
 
         Returns
         -------
-        position_x : npt.NDArray[float64]
-        position_y : npt.NDArray[float64]
-        movement_x : npt.NDArray[float64]
-        movement_y : npt.NDArray[float64]
+        position : npt.NDArray[float64]
+        movement : npt.NDArray[float64]
             As explained below.
 
         """
@@ -267,173 +260,154 @@ class NCAAEExportExport(bpy.types.Operator):
         # +---------+------------------------------------------+
         # |         |           Track 1  Track 2  Track 3      |
         # +---------+------------------------------------------+
-        # | Frame 1 | array([[  x,       x,       x        ],  |
-        # | Frame 2 |        [  x,       x,       x        ],  |
-        # | Frame 3 |        [  x,       x,       x        ],  |
-        # | Frame 4 |        [  x,       x,       x        ],  |
-        # | Frame 5 |        [  x,       x,       x        ]]) |
+        # | Frame 1 | array([[  [x, y],  [x, y],  [x, y]   ],  |
+        # | Frame 2 |        [  [x, y],  [x, y],  [x, y]   ],  |
+        # | Frame 3 |        [  [x, y],  [x, y],  [x, y]   ],  |
+        # | Frame 4 |        [  [x, y],  [x, y],  [x, y]   ],  |
+        # | Frame 5 |        [  [x, y],  [x, y],  [x, y]   ]]) |
         # +---------+------------------------------------------+
         # There should be more calculations intraframe than interframe so
         # position and movement arrays put the frame as the first axis.
         #
-        # The x and y value will have an aspect ratio of 1:1. However,
-        # regarding the range of x and y that is on the video, please refer to
-        # the conversion below.
+        # The x and y value will have a pixel aspect ratio of 1:1. See Step 03
+        # for the range where x and y value is on screen.
         # 
-        # Also, on the topic of precision, Blender only uses float32, while
-        # scipy explicitly uses float64 instead. In order to prevent any
-        # future problems, NC AAE Export uses float64 across the whole script.
-        position_x = np.empty([clip.frame_duration, len(clip.tracking.tracks)], dtype=np.float64)
-        position_x.fill(np.nan)
-        position_y = np.empty([clip.frame_duration, len(clip.tracking.tracks)], dtype=np.float64)
-        position_y.fill(np.nan)
+        # Also, on the topic of precision, NC AAE Export uses float64 across
+        # the whole script
+        position = np.empty((clip.frame_duration, len(clip.tracking.tracks), 2), dtype=np.float64)
+        position.fill(np.nan)
         
         # This will become the slowest step of all the procedures
         for i, track in enumerate(clip.tracking.tracks):
-            for marker in track.markers[1:]:
-                if not marker.mute:
-                    position_x[marker.frame - 1][i], position_y[marker.frame - 1][i] = marker.co
+            for marker in track.markers[1:] if not track.markers[0].is_keyed else track.markers:
+                if not 0 < marker.frame <= clip.frame_duration:
+                    continue
+                if marker.mute:
+                    continue
+                position[marker.frame - 1][i] = marker.co
 
-        position_x *= ratio_x
-        position_y *= ratio_y
-        
+        position *= ratio
+
         # movement array structure
         # +-----------+------------------------------------------+
         # |           |           Track 1  Track 2  Track 3      |
         # +-----------+------------------------------------------+
-        # | Frame 1/2 | array([[  diff_x,  diff_x,  diff_x   ],  |
-        # | Frame 2/3 |        [  diff_x,  diff_x,  diff_x   ],  |
-        # | Frame 3/4 |        [  diff_x,  diff_x,  diff_x   ],  |
-        # | Frame 4/5 |        [  diff_x,  diff_x,  diff_x   ]]) |
+        # | Frame 1/2 | array([[  [x ,y],  [x, y],  [x, y]   ],  |
+        # | Frame 2/3 |        [  [x ,y],  [x, y],  [x, y]   ],  |
+        # | Frame 3/4 |        [  [x ,y],  [x, y],  [x, y]   ],  |
+        # | Frame 4/5 |        [  [x ,y],  [x, y],  [x, y]   ]]) |
         # +-----------+                                          |
         # | size -= 1 |                                          |
         # +-----------+------------------------------------------+
-        return position_x, position_y, np.diff(position_x, axis=0), np.diff(position_y, axis=0)
+        return position, np.diff(position, axis=0)
 
     @staticmethod
-    def _step_08_reduce_position_and_movement_array_and_calculate_origin_array_and_origin_estimator(position_x, position_y, movement_x, movement_y):
+    def _step_08_reduce_position_and_movement_array_and_calculate_origin_array_and_filtered_origin_array(position, movement):
         """
-        Remove the nans in the movement array and calculate the origin array.
-        [Step 08]
+        Remove the nans in the position and movement array and calculate the
+        origin array. [Step 08]
 
         Parameters
         ----------
-        position_x : npt.NDArray[float64]
-        position_y : npt.NDArray[float64]
-        movement_x : npt.NDArray[float64]
-        movement_y : npt.NDArray[float64]
+        position : npt.NDArray[float64]
+        movement : npt.NDArray[float64]
             The position and movement arrays likely coming from Step 04.
 
         Returns
         -------
-        reduced_position_x : npt.NDArray[npt.NDArray[float64]]
-        reduced_position_y : npt.NDArray[npt.NDArray[float64]]
-        reduced_movement_x : npt.NDArray[npt.NDArray[float64]]
-        reduced_movement_y : npt.NDArray[npt.NDArray[float64]]
+        reduced_position : npt.NDArray[npt.NDArray[float64]]
+        reduced_movement : npt.NDArray[npt.NDArray[float64]]
             Position and movement array without nans.
-        origin_x : npt.NDArray[npt.NDArray[float64]]
-        origin_y : npt.NDArray[npt.NDArray[float64]]
+        origin : npt.NDArray[npt.NDArray[float64]]
             Origin array.
-        origin_estimator : npt.NDArray[sklearn.base.BaseEstimator or None]
-            Origin estimator.
+        filtered_origin : npt.NDArray[npt.NDArray[float64]]
+            Origin array after removing outliers.
+
         """
         import numpy as np
 
-        frames = movement_x.shape[0]
-        reduced_position_x = np.empty(frames, dtype=object)
-        reduced_position_y = np.empty(frames, dtype=object)
-        reduced_movement_x = np.empty(frames, dtype=object)
-        reduced_movement_y = np.empty(frames, dtype=object)
-        origin_x = np.empty(frames, dtype=object)
-        origin_y = np.empty(frames, dtype=object)
+        frames = movement.shape[0]
+        reduced_position = np.empty(frames, dtype=object)
+        reduced_movement = np.empty(frames, dtype=object)
+        origin = np.empty(frames, dtype=object)
+        reduced_origin = np.empty(frames, dtype=object)
         origin_estimator = np.empty(frames, dtype=object)
 
         for frame in range(0, frames):
-            reduced_position_x[frame], reduced_position_y[frame], \
-            reduced_movement_x[frame], reduced_movement_y[frame] \
+            reduced_position[frame], reduced_movement[frame] \
                 = NCAAEExportExport._step_08__reduce_position_and_movement_array_per_frame( \
-                      position_x[frame], position_y[frame], \
-                      movement_x[frame], movement_y[frame])
+                      position[frame], movement[frame])
             
-            if reduced_movement_x[frame].shape[0] >= 2:
-                origin_x[frame], origin_y[frame] \
+            if reduced_movement[frame].shape[0] >= 2:
+                origin[frame] \
                     = NCAAEExportExport._step_08__calculate_origin_array_per_frame( \
-                          reduced_position_x[frame], reduced_position_y[frame], \
-                          reduced_movement_x[frame], reduced_movement_y[frame])
+                          reduced_position[frame], reduced_movement[frame])
+                reduced_origin[frame] \
+                    = NCAAEExportExport._step_08__reduce_origin_array_per_frame( \
+                          origin[frame])
             else:
-                origin_x[frame], origin_y[frame] \
-                    = np.empty(0, dtype=np.float64), np.empty(0, dtype=np.float64)
+                origin[frame] \
+                    = np.empty((0, 2), dtype=np.float64)
+                reduced_origin[frame] \
+                    = np.empty((0, 2), dtype=np.float64)
             
-            if origin_x[frame].shape[0] >= 1 and \
-               np.count_nonzero(~np.isnan(origin_x[frame])) >= 1:
-                origin_estimator[frame] \
-                    = NCAAEExportExport._step_08__train_origin_estimator_per_frame( \
-                          origin_x[frame], origin_y[frame])
+            if reduced_origin[frame].shape[0] >= 1:
+                filtered_origin[frame] \
+                    = NCAAEExportExport._step_08__remove_outliers_from_origin_array_per_frame( \
+                          reduced_origin[frame])
             else:
-                origin_estimator[frame] = None
+                filtered_origin[frame] = \
+                    = np.empty((0, 2), dtype=np.float64)
 
-        return reduced_position_x, reduced_position_y, \
-               reduced_movement_x, reduced_movement_y, \
-               origin_x, origin_y, \
-               origin_estimator
+        return reduced_position, reduced_movement, origin, filtered_origin
 
     @staticmethod
-    def _step_08__reduce_position_and_movement_array_per_frame(position_x, position_y, movement_x, movement_y):
+    def _step_08__reduce_position_and_movement_array_per_frame(position, movement):
         """
         Parameters
         ----------
-        position_x : npt.NDArray[float64]
-        position_y : npt.NDArray[float64]
-        movement_x : npt.NDArray[float64]
-        movement_y : npt.NDArray[float64]
+        position : npt.NDArray[float64]
+        movement : npt.NDArray[float64]
             The position and movement arrays of the frame.
 
         Returns
         -------
-        reduced_position_x : npt.NDArray[float64]
-        reduced_position_y : npt.NDArray[float64]
-        reduced_movement_x : npt.NDArray[float64]
-        reduced_movement_y : npt.NDArray[float64]
+        reduced_position : npt.NDArray[float64]
+        reduced_movement : npt.NDArray[float64]
             Position and movement array without nans.
+
         """
         import numpy as np
 
-        available_indexes = np.where(~np.isnan(movement_x))
+        available_indexes = np.nonzero(~np.isnan(movement[:, 0]))
 
-        return position_x[available_indexes], position_y[available_indexes], \
-               movement_x[available_indexes], movement_y[available_indexes]
+        return position[available_indexes], movement[available_indexes]
 
     @staticmethod
-    def _step_08__calculate_origin_array_per_frame(reduced_position_x, reduced_position_y, reduced_movement_x, reduced_movement_y):
+    def _step_08__calculate_origin_array_per_frame(reduced_position, reduced_movement):
         """
         Parameters
         ----------
-        reduced_position_x : npt.NDArray[float64]
-        reduced_position_y : npt.NDArray[float64]
-        reduced_movement_x : npt.NDArray[float64]
-        reduced_movement_y : npt.NDArray[float64]
+        reduced_position : npt.NDArray[float64]
+        reduced_movement : npt.NDArray[float64]
             Position and movement array for the frame without nans and not
             empty.
 
         Returns
         -------
-        origin_x : npt.NDArray[float64]
-        origin_y : npt.NDArray[float64]
+        origin : npt.NDArray[float64]
             Origin array.
+
         """
         import numpy as np
 
-        select = NCAAEExportExport._triangular_number(reduced_movement_x.shape[0])
+        select = NCAAEExportExport._triangular_number(reduced_movement.shape[0])
         first_indexes, second_indexes = select.get_complete_pairs()
 
-        pizza = np.column_stack((reduced_position_x[first_indexes],
-                                 reduced_position_y[first_indexes],
-                                 reduced_movement_x[first_indexes],
-                                 reduced_movement_y[first_indexes],
-                                 reduced_position_x[second_indexes],
-                                 reduced_position_y[second_indexes],
-                                 reduced_movement_x[second_indexes],
-                                 reduced_movement_y[second_indexes]))
+        pizza = np.column_stack((reduced_position[first_indexes],
+                                 reduced_movement[first_indexes],
+                                 reduced_position[second_indexes],
+                                 reduced_movement[second_indexes]))
 
         # https://stackoverflow.com/questions/563198/
         def eat(slice):
@@ -442,25 +416,65 @@ class NCAAEExportExport(bpy.types.Operator):
             else:
                 return slice[0:2] + np.cross(slice[4:6] - slice[0:2], slice[6:8]) / j * slice[2:4]
 
-        origin = np.apply_along_axis(eat, 1, pizza)
-
-        return origin[:, 0], origin[:, 1]
+        return np.apply_along_axis(eat, 1, pizza)
 
     @staticmethod
-    def _step_08__train_origin_estimator_per_frame(origin_x, origin_y):
+    def _step_08__reduce_origin_array_per_frame(origin):
         """
         Parameters
         ----------
-        origin_x : npt.NDArray[float64]
-        origin_y : npt.NDArray[float64]
+        origin : npt.NDArray[float64]
+            The origin array of the frame.
+
+        Returns
+        -------
+        reduced_origin : npt.NDArray[float64]
+            Origin array without nans.
+        
+        """
+        import numpy as np
+
+        return origin[np.nonzero(~np.isnan(origin[:, 0]))]
+
+    @staticmethod
+    def _step_08__remove_outliers_from_origin_array_per_frame(reduced_origin):
+        """
+        Parameters
+        ----------
+        reduced_origin : npt.NDArray[float64]
             Origin array of the frame, not empty and not all filled with nans.
 
         Returns
         -------
         origin_estimator : sklearn.base.BaseEstimator
             Origin estimator.
+
         """
-        return None
+        import numpy as np
+        from sklearn.neighbors import LocalOutlierFactor
+
+        clf = LocalOutlierFactor(n_neighbors=np.ceil(reduced_origin.shape[0] / 3).astype(int)) # LocalOutlierFactor contamination parameter requires sklearn version 0.22
+        estimation = clf.fit_predict(reduced_origin)
+
+        return reduced_origin[np.nonzero(estimation == 1)]
+
+    @staticmethod
+    def _step_18_decide_proper_method_and_count_scale_koma_uchi(filtered_origin, max_koma_uchi):
+        """
+        Decide if the scale x/y method or the pure x/y method is suitable for
+        each frame and count the scale コマ打ち. Position コマ打ち will be calculated
+        in later functions. [Step 18]
+
+        """
+        # Two markers will surely be enough to record a scaling, but if I only have one set of coordinates in the origin array, 
+        # how can I differentiate it from pure x/y move?
+
+        # No, three is the minimum.
+
+        # No, three is definitely not okay. You can't confidently say it is not scale x/y in the case when all three origins are apart,
+        
+        # Four?
+
 
     # @staticmethod
     # def _step_18_try_to_find_scale_origin_and_count_scale_koma_uchi(position_x, position_y, movement_x, movement_y, ratio_x, ratio_y, max_koma_uchi, do_plot):
@@ -516,156 +530,6 @@ class NCAAEExportExport(bpy.types.Operator):
     #     # TODO finish this for
     #     # TODO matplotlib
         
-    # @staticmethod
-    # def _step_18__call_search_scale_origins(position_x, position_y, movement_x, movement_y, prev_method, do_plot):
-    #     """
-    #     Parameters
-    #     ----------
-    #     position_x : npt.NDArray[float64]
-    #     position_y : npt.NDArray[float64]
-    #     movement_x : npt.NDArray[float64]
-    #     movement_y : npt.NDArray[float64]
-    #         1D array for the frame please.
-    #     prev_method : NCAAEExportExport._method
-    #     do_plot : bool
-    #         NCAAEExportSettings.do_statistics.
-        
-    #     Returns
-    #     -------
-    #     method : NCAAEExportExport._method
-    #     origins_x : npt.NDArray[float64]
-    #     origins_y : npt.NDArray[float64]
-    #     is_complete : bool
-    #         Complete set of origins.
-    #     nan_percent : float or None
-    #         None if not NCAAEExportSettings.do_statistics.
-    #     scalars_x : npt.NDArray[float64] or None
-    #     scalars_y : npt.NDArray[float64] or None
-    #         [35, 65, 30, 70]. None if not NCAAEExportSettings.do_statistics.
-
-    #     """
-    #     available_indexes = np.where(~np.isnan(movement_x))
-    #     position_x_available = position_x[available_indexes]
-    #     position_y_available = position_y[available_indexes]
-    #     movement_x_available = movement_x[available_indexes]
-    #     movement_y_available = movement_y[available_indexes]
-
-    #     if prev_method == NCAAEExportExport._method.UNDEFINED:
-    #         origins_x, origins_y, is_complete \
-    #             = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
-    #         is_found, nan_percent, scalars_x, scalars_y \
-    #             = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
-    #     else:
-    #         origins_x, origins_y, is_complete \
-    #             = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available, 21)
-    #         is_found, nan_percent, scalars_x, scalars_y \
-    #             = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
-    #         if NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y != prev_method and not is_complete:
-    #             origins_x, origins_y, is_complete \
-    #                 = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
-    #             is_found, nan_percent, scalars_x, scalars_y \
-    #                 = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
-
-    #     return NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y, origins_x, origins_y, is_complete, nan_percent, scalars_x, scalars_y
-        
-    # @staticmethod
-    # def _step_18__calculate_scale_origins(position_x, position_y, movement_x, movement_y, max_sample_size=0):
-    #     """
-    #     Parameters
-    #     ----------
-    #     position_x : npt.NDArray[float64]
-    #     position_y : npt.NDArray[float64]
-    #     movement_x : npt.NDArray[float64]
-    #     movement_y : npt.NDArray[float64]
-    #         1D array without NaN please.
-    #     max_sample_size: int
-    #         0 if you want to calculate through all the pairs.
-        
-    #     Returns
-    #     -------
-    #     origins_x : npt.NDArray[float64]
-    #     origins_y : npt.NDArray[float64]
-    #     is_complete : bool
-
-    #     """
-    #     import numpy as np
-            
-    #     select = NCAAEExportExport._triangular_number(position_x.shape[0])
-    #     if max_sample_size != 0 and select.full_size > max_sample_size:
-    #         first_indexes, second_indexes = select.get_sample_pairs(max_sample_size)
-    #         is_complete = False
-    #     else:
-    #         first_indexes, second_indexes = select.get_complete_pairs()
-
-    #     pizza = np.column_stack((position_x[first_indexes],
-    #                              position_y[first_indexes],
-    #                              movement_x[first_indexes],
-    #                              movement_y[first_indexes],
-    #                              position_x[second_indexes],
-    #                              position_y[second_indexes],
-    #                              movement_x[second_indexes],
-    #                              movement_y[second_indexes]))
-        
-    #     # https://stackoverflow.com/questions/563198/
-    #     def eat(slice):
-    #         if (j := np.cross(slice[2:3], slice[6:7])) == 0: # := requires Python 3.8 (Blender 2.93)
-    #             return np.array([np.nan, np.nan], dtype=np.float64)
-    #         else:
-    #             return slice[0:1] + np.cross(slice[4:5] - slice[0:1], slice[6:7]) / j * slice[2:3]
-
-    #     origins = np.apply_along_axis(eat, 0, pizza)
-    #     #                                  ^ This is the slice angle, not the amount of pizza.
-        
-    #     return origins[:, 0], origins[:, 1], is_complete
-
-    # @staticmethod
-    # def _step_18__check_scale_origins(origins_x, origins_y, do_plot):
-    #     """
-    #     Parameters
-    #     ----------
-    #     origins_x : npt.NDArray[float64]
-    #     origins_y : npt.NDArray[float64]
-    #         1D array including the nans.
-    #     do_plot : bool
-    #         NCAAEExportSettings.do_statistics.
-        
-    #     Returns
-    #     -------
-    #     is_found : bool
-    #     nan_percent : float or None
-    #         None if not NCAAEExportSettings.do_statistics.
-    #     scalars_x : npt.NDArray[float64] or None
-    #     scalars_y : npt.NDArray[float64] or None
-    #         [35, 65, 30, 70]. None if not NCAAEExportSettings.do_statistics.
-
-    #     """
-    #     import numpy as np
-
-    #     nans = np.count_nonzero(np.isnan(origins_x))
-    #     nan = nans / origins_x.shape[0]
-
-    #     # https://en.wikipedia.org/wiki/Interquartile_range
-    #     if not do_plot:
-    #         # If 50% of the markers doesn't work, then 75% of the origins will
-    #         # have problems. Hope this Q1 = 35, Q3 = 65 setting will work.
-    #         scalars_x = np.nanpercentile(origins_x, [35, 65]) # np.nanpercentile requires numpy version 1.9.0
-    #         scalars_y = np.nanpercentile(origins_y, [35, 65])
-    #     else: # do_plot
-    #         scalars_x = np.nanpercentile(origins_x, [35, 65, 30, 70])
-    #         scalars_y = np.nanpercentile(origins_y, [35, 65, 30, 70])
-
-    #     is_found = scalars_x[1] - scalars_x[0] < 0.20 and \
-    #                scalars_y[1] - scalars_y[0] < 0.20 and \
-    #                nan < 0.25
-                
-    #     if not do_plot:
-    #         return is_found, None, None, None
-    #     else: # do_plot
-    #         return is_found, nan, scalars_x, scalars_y
-        
-    # @staticmethod
-    # def _step_18__plot():
-    #     pass
     
     @staticmethod
     def _step_2C_find_scale_origin_and_calculate_scale():
