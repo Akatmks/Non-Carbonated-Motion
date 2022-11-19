@@ -1,22 +1,29 @@
 # nc-aae-export.py
 # Copyright (c) Akatsumekusa
 
-#      _______  ________  ________  ________  ________  ________                                   
-#    //   /   \/    /   \/        \/       / /        \/        \                                  
-#   //        /         /         /        \/         /         /                                  
-#  /         /         /         /         /        _/        _/                                   
-#  \__/_____/\________/\__/__/__/\________/\________/\____/___/                                    
-#      _______  ________  ________  ________  ________  ________   ________  ________  ________    
-#    //       \/        \/    /   \/    /   \/        \/    /   \ /        \/    /   \/        \   
-#   //        /         /         /         /         /         /_/       //         /       __/   
-#  /       --/        _/         /         /       --/         //         /         /       / /    
-#  \________/\____/___/\________/\__/_____/\________/\___/____/ \________/\__/_____/\________/     
-#     _______   _______    _______        _______  ________  ________  ________  ________  ________ 
-#    /       \\/       \\//       \     //       \/    /   \/        \/        \/        \/        \
-#   /        //        ///        /    //        /_       _/         /         /         /        _/
-#  /         /         /        _/    /        _/         /       __/         /        _//       /  
-#  \___/____/\___/____/\________/     \________/\___/____/\______/  \________/\____/___/ \______/   
-# 
+#  
+#        ::::    :::  ::::::::  ::::    :::                                                                            
+#       :+:+:   :+: :+:    :+: :+:+:   :+:                                                                             
+#      :+:+:+  +:+ +:+    +:+ :+:+:+  +:+                                                                              
+#     +#+ +:+ +#+ +#+    +:+ +#+ +:+ +#+                                                                               
+#    +#+  +#+#+# +#+    +#+ +#+  +#+#+#                                                                                
+#   #+#   #+#+# #+#    #+# #+#   #+#+#                                                                                 
+#  ###    ####  ########  ###    ####                                                                                  
+#        ::::::::      :::     :::::::::  :::::::::   ::::::::  ::::    :::     ::: ::::::::::: :::::::::: :::::::::   
+#      :+:    :+:   :+: :+:   :+:    :+: :+:    :+: :+:    :+: :+:+:   :+:   :+: :+:   :+:     :+:        :+:    :+:   
+#     +:+         +:+   +:+  +:+    +:+ +:+    +:+ +:+    +:+ :+:+:+  +:+  +:+   +:+  +:+     +:+        +:+    +:+    
+#    +#+        +#++:++#++: +#++:++#:  +#++:++#+  +#+    +:+ +#+ +:+ +#+ +#++:++#++: +#+     +#++:++#   +#+    +:+     
+#   +#+        +#+     +#+ +#+    +#+ +#+    +#+ +#+    +#+ +#+  +#+#+# +#+     +#+ +#+     +#+        +#+    +#+      
+#  #+#    #+# #+#     #+# #+#    #+# #+#    #+# #+#    #+# #+#   #+#+# #+#     #+# #+#     #+#        #+#    #+#       
+#  ########  ###     ### ###    ### #########   ########  ###    #### ###     ### ###     ########## #########         
+#            :::         :::     ::::::::::         :::::::::: :::    ::: :::::::::   ::::::::  ::::::::: ::::::::::: 
+#         :+: :+:     :+: :+:   :+:                :+:        :+:    :+: :+:    :+: :+:    :+: :+:    :+:    :+:      
+#       +:+   +:+   +:+   +:+  +:+                +:+         +:+  +:+  +:+    +:+ +:+    +:+ +:+    +:+    +:+       
+#     +#++:++#++: +#++:++#++: +#++:++#           +#++:++#     +#++:+   +#++:++#+  +#+    +:+ +#++:++#:     +#+        
+#    +#+     +#+ +#+     +#+ +#+                +#+         +#+  +#+  +#+        +#+    +#+ +#+    +#+    +#+         
+#   #+#     #+# #+#     #+# #+#                #+#        #+#    #+# #+#        #+#    #+# #+#    #+#    #+#          
+#  ###     ### ###     ### ##########         ########## ###    ### ###         ########  ###    ###    ###           
+#  
 
 # ---------------------------------------------------------------------
 # Permission is hereby granted, free of charge, to any person obtaining
@@ -38,6 +45,8 @@
 # ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+# ---------------------------------------------------------------------
+# Title font: Alligator by Simon Bradley
 # ---------------------------------------------------------------------
 
 bl_info = {
@@ -91,10 +100,6 @@ class NCAAEExportExport(bpy.types.Operator):
     bl_label = "Export"
     bl_description = "Export AAE data as txt files next to the original movie clip"
     bl_idname = "movieclip.nc_aae_export_export"
-
-    def execute(self, context):
-        NCAAEExportExport._export(context.edit_movieclip, context.screen.NCAAEExportSettings)
-        return {'FINISHED'}
     
     class _method(Enum):
         UNDEFINED = -1
@@ -140,8 +145,8 @@ class NCAAEExportExport(bpy.types.Operator):
             # This is Python.
             choices = np.arange(self.full_size)
 
-            first_indexes = floor(sqrt(2 * choice + 0.25) + 0.5)
-            second_indexes = choice - (first_indexes - 1) * first_indexes // 2
+            first_indexes = floor(sqrt(2 * choices + 0.25) + 0.5).astype(int)
+            second_indexes = choices - (first_indexes - 1) * first_indexes // 2
 
             return first_indexes, second_indexes
 
@@ -167,15 +172,14 @@ class NCAAEExportExport(bpy.types.Operator):
                 first_indexes, second_indexes = self.get_complete_pairs()
             else:
                 choices = self._random.choice(self.full_size, sample_size)
-                first_indexes = floor(sqrt(2 * choice + 0.25) + 0.5)
-                second_indexes = choice - (first_indexes - 1) * first_indexes // 2
+                first_indexes = floor(sqrt(2 * choices + 0.25) + 0.5).astype(int)
+                second_indexes = choices - (first_indexes - 1) * first_indexes // 2
 
             return first_indexes, second_indexes
 
         full_size = -1
         """
-        full_size : int
-            The number of possible pairs.
+        The number of possible pairs.
         """
 
         def _init_random(self):
@@ -185,21 +189,27 @@ class NCAAEExportExport(bpy.types.Operator):
         
         _random = None
 
-    @staticmethod
-    def _export(clip, settings):
+    def execute(self, context):
+        clip = context.edit_movieclip
+        settings = context.screen.NCAAEExportSettings
+
         ratio_x, ratio_y \
-            = NCAAEExportExport._step_03_calculate_aspect_ratio(clip)
+            = NCAAEExportExport._step_03_calculate_aspect_ratio( \
+                  clip)
         position_x, position_y, movement_x, movement_y \
-            = NCAAEExportExport._step_04_convert_tracking_markers_to_position_and_movement_array(clip, ratio_x, ratio_y)
-        print("position_x")
-        print(position_x)
-        print("position_y")
-        print(position_y)
-        print("movement_x")
-        print(movement_x)
-        print("movement_y")
-        print(movement_y)
+            = NCAAEExportExport._step_04_convert_tracking_markers_to_position_and_movement_array( \
+                  clip, ratio_x, ratio_y)
+        
+        reduced_position_x, reduced_position_y, \
+        reduced_movement_x, reduced_movement_y, \
+        origin_x, origin_y, \
+        origin_estimator \
+            = NCAAEExportExport._step_08_reduce_position_and_movement_array_and_calculate_origin_array_and_origin_estimator( \
+                  position_x, position_y, movement_x, movement_y)
+
         print(clip.filepath)
+        
+        return {'FINISHED'}
 
     @staticmethod
     def _step_03_calculate_aspect_ratio(clip):
@@ -220,7 +230,7 @@ class NCAAEExportExport(bpy.types.Operator):
         # As of 2021/2022
         if ar < 1 / 1.35: # 9:16, 9:19 and higher videos
             return 1 / 1.35, 1 / 1.35 / ar
-        elif ar < 1: # vertical aspect ratio from 1:1, 3:4, up to 1:1.35
+        elif ar < 1: # vertical videos from 1:1, 3:4, up to 1:1.35
             return ar, 1
         elif ar <= 1.81: # 1:1, 4:3, 16:9, up to 1920 x 1061
             return ar, 1
@@ -249,6 +259,9 @@ class NCAAEExportExport(bpy.types.Operator):
 
         """
         import numpy as np
+
+        if not clip.frame_duration >= 1:
+            raise ValueError("clip.frame_duration must be greater than or equal to 1")
 
         # position array structure
         # +---------+------------------------------------------+
@@ -298,16 +311,10 @@ class NCAAEExportExport(bpy.types.Operator):
         return position_x, position_y, np.diff(position_x, axis=0), np.diff(position_y, axis=0)
 
     @staticmethod
-    def _step_18_try_to_find_scale_origin_and_count_scale_koma_uchi(position_x, position_y, movement_x, movement_y, ratio_x, ratio_y, max_koma_uchi, do_plot):
+    def _step_08_reduce_position_and_movement_array_and_calculate_origin_array_and_origin_estimator(position_x, position_y, movement_x, movement_y):
         """
-        Pick random pairs of movements from the position array and try to find
-        the scale origin for every frame.
-        Decide if the scale method or the pure x/y method is suitable for the
-        clip. It will slice the clip into multiple sections if different
-        methods are suitable for difference sections of the clip.
-        It will also count the scale コマ打ち, while position コマ打ち will be
-        calculated in other functions.
-        [Step 18]
+        Remove the nans in the movement array and calculate the origin array.
+        [Step 08]
 
         Parameters
         ----------
@@ -316,43 +323,62 @@ class NCAAEExportExport(bpy.types.Operator):
         movement_x : npt.NDArray[float64]
         movement_y : npt.NDArray[float64]
             The position and movement arrays likely coming from Step 04.
-        ratio_x : float
-        ratio_y : float
-        max_koma_uchi : int
-            NCAAEExportSettings.max_koma_uchi if NCAAEExportSettings.do_koma_uchi else 1.
-        do_plot : bool
-            NCAAEExportSettings.do_statistics.
 
         Returns
         -------
-        sections : list[tuple[int, NCAAEExportExport._method]]
-            A list of (frame, method)
-            This list only records the edges, or the frame when the method
-            changes from one to another.
-        scale_koma_uchi : list[tuple[int, int]]
-            A list of (frame, koma_uchi)
-            This list only records the edges.
-        origins_x : npt.NDArray[npt.NDArray[float64] or None]
-        origins_y : npt.NDArray[npt.NDArray[float64] or None]
-
+        reduced_position_x : npt.NDArray[npt.NDArray[float64]]
+        reduced_position_y : npt.NDArray[npt.NDArray[float64]]
+        reduced_movement_x : npt.NDArray[npt.NDArray[float64]]
+        reduced_movement_y : npt.NDArray[npt.NDArray[float64]]
+            Position and movement array without nans.
+        origin_x : npt.NDArray[npt.NDArray[float64]]
+        origin_y : npt.NDArray[npt.NDArray[float64]]
+            Origin array.
+        origin_estimator : npt.NDArray[sklearn.base.BaseEstimator or None]
+            Origin estimator.
         """
         import numpy as np
-        
+
         frames = movement_x.shape[0]
-        origins_x # TODO
-        origins_y # TODO 
-        prev = NCAAEExportExport._method.UNDEFINED
-        for i in range(frames // 2, frames):
-            prev, origins_x, origins_y, is_complete, nan_percent, scalars_x, scalars_y \
-                = NCAAEExportExport._step_18__call_search_scale_origins(position_x[i], position_y[i], movement_x[i], movement_y[i], prev, do_plot)
+        reduced_position_x = np.empty(frames, dtype=object)
+        reduced_position_y = np.empty(frames, dtype=object)
+        reduced_movement_x = np.empty(frames, dtype=object)
+        reduced_movement_y = np.empty(frames, dtype=object)
+        origin_x = np.empty(frames, dtype=object)
+        origin_y = np.empty(frames, dtype=object)
+        origin_estimator = np.empty(frames, dtype=object)
 
+        for frame in range(0, frames):
+            reduced_position_x[frame], reduced_position_y[frame], \
+            reduced_movement_x[frame], reduced_movement_y[frame] \
+                = NCAAEExportExport._step_08__reduce_position_and_movement_array_per_frame( \
+                      position_x[frame], position_y[frame], \
+                      movement_x[frame], movement_y[frame])
+            
+            if reduced_movement_x[frame].shape[0] >= 2:
+                origin_x[frame], origin_y[frame] \
+                    = NCAAEExportExport._step_08__calculate_origin_array_per_frame( \
+                          reduced_position_x[frame], reduced_position_y[frame], \
+                          reduced_movement_x[frame], reduced_movement_y[frame])
+            else:
+                origin_x[frame], origin_y[frame] \
+                    = np.empty(0, dtype=np.float64), np.empty(0, dtype=np.float64)
+            
+            if origin_x[frame].shape[0] >= 1 and \
+               np.count_nonzero(~np.isnan(origin_x[frame])) >= 1:
+                origin_estimator[frame] \
+                    = NCAAEExportExport._step_08__train_origin_estimator_per_frame( \
+                          origin_x[frame], origin_y[frame])
+            else:
+                origin_estimator[frame] = None
 
-        # scale_koma_uchi is for return, just return the current stats
-        # TODO finish this for
-        # TODO matplotlib
-        
+        return reduced_position_x, reduced_position_y, \
+               reduced_movement_x, reduced_movement_y, \
+               origin_x, origin_y, \
+               origin_estimator
+
     @staticmethod
-    def _step_18__call_search_scale_origins(position_x, position_y, movement_x, movement_y, prev_method, do_plot):
+    def _step_08__reduce_position_and_movement_array_per_frame(position_x, position_y, movement_x, movement_y):
         """
         Parameters
         ----------
@@ -360,147 +386,286 @@ class NCAAEExportExport(bpy.types.Operator):
         position_y : npt.NDArray[float64]
         movement_x : npt.NDArray[float64]
         movement_y : npt.NDArray[float64]
-            1D array for the frame please.
-        prev_method : NCAAEExportExport._method
-        do_plot : bool
-            NCAAEExportSettings.do_statistics.
-        
+            The position and movement arrays of the frame.
+
         Returns
         -------
-        method : NCAAEExportExport._method
-        origins_x : npt.NDArray[float64]
-        origins_y : npt.NDArray[float64]
-        is_complete : bool
-            Complete set of origins.
-        nan_percent : float or None
-            None if not NCAAEExportSettings.do_statistics.
-        scalars_x : npt.NDArray[float64] or None
-        scalars_y : npt.NDArray[float64] or None
-            [35, 65, 30, 70]. None if not NCAAEExportSettings.do_statistics.
-
-        """
-        available_indexes = np.where(~np.isnan(movement_x))
-        position_x_available = position_x[available_indexes]
-        position_y_available = position_y[available_indexes]
-        movement_x_available = movement_x[available_indexes]
-        movement_y_available = movement_y[available_indexes]
-
-        if prev_method == NCAAEExportExport._method.UNDEFINED:
-            origins_x, origins_y, is_complete \
-                = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
-            is_found, nan_percent, scalars_x, scalars_y \
-                = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
-        else:
-            origins_x, origins_y, is_complete \
-                = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available, 21)
-            is_found, nan_percent, scalars_x, scalars_y \
-                = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
-            if NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y != prev_method and not is_complete:
-                origins_x, origins_y, is_complete \
-                    = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
-                is_found, nan_percent, scalars_x, scalars_y \
-                    = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
-
-        return NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y, origins_x, origins_y, is_complete, nan_percent, scalars_x, scalars_y
-        
-    @staticmethod
-    def _step_18__calculate_scale_origins(position_x, position_y, movement_x, movement_y, max_sample_size=0):
-        """
-        Parameters
-        ----------
-        position_x : npt.NDArray[float64]
-        position_y : npt.NDArray[float64]
-        movement_x : npt.NDArray[float64]
-        movement_y : npt.NDArray[float64]
-            1D array without NaN please.
-        max_sample_size: int
-            0 if you want to calculate through all the pairs.
-        
-        Returns
-        -------
-        origins_x : npt.NDArray[float64]
-        origins_y : npt.NDArray[float64]
-        is_complete : bool
-
+        reduced_position_x : npt.NDArray[float64]
+        reduced_position_y : npt.NDArray[float64]
+        reduced_movement_x : npt.NDArray[float64]
+        reduced_movement_y : npt.NDArray[float64]
+            Position and movement array without nans.
         """
         import numpy as np
-            
-        select = NCAAEExportExport._triangular_number(position_x.shape[0])
-        if max_sample_size != 0 and select.full_size > max_sample_size:
-            first_indexes, second_indexes = select.get_sample_pairs(max_sample_size)
-            is_complete = False
-        else:
-            first_indexes, second_indexes = select.get_complete_pairs()
 
-        pizza = np.column_stack((position_x[first_indexes],
-                                 position_y[first_indexes],
-                                 movement_x[first_indexes],
-                                 movement_y[first_indexes],
-                                 position_x[second_indexes],
-                                 position_y[second_indexes],
-                                 movement_x[second_indexes],
-                                 movement_y[second_indexes]))
-        
+        available_indexes = np.where(~np.isnan(movement_x))
+
+        return position_x[available_indexes], position_y[available_indexes], \
+               movement_x[available_indexes], movement_y[available_indexes]
+
+    @staticmethod
+    def _step_08__calculate_origin_array_per_frame(reduced_position_x, reduced_position_y, reduced_movement_x, reduced_movement_y):
+        """
+        Parameters
+        ----------
+        reduced_position_x : npt.NDArray[float64]
+        reduced_position_y : npt.NDArray[float64]
+        reduced_movement_x : npt.NDArray[float64]
+        reduced_movement_y : npt.NDArray[float64]
+            Position and movement array for the frame without nans and not
+            empty.
+
+        Returns
+        -------
+        origin_x : npt.NDArray[float64]
+        origin_y : npt.NDArray[float64]
+            Origin array.
+        """
+        import numpy as np
+
+        select = NCAAEExportExport._triangular_number(reduced_movement_x.shape[0])
+        first_indexes, second_indexes = select.get_complete_pairs()
+
+        pizza = np.column_stack((reduced_position_x[first_indexes],
+                                 reduced_position_y[first_indexes],
+                                 reduced_movement_x[first_indexes],
+                                 reduced_movement_y[first_indexes],
+                                 reduced_position_x[second_indexes],
+                                 reduced_position_y[second_indexes],
+                                 reduced_movement_x[second_indexes],
+                                 reduced_movement_y[second_indexes]))
+
         # https://stackoverflow.com/questions/563198/
         def eat(slice):
-            if (j := np.cross(slice[2:3], slice[6:7])) == 0: # := requires Python 3.8 (Blender 2.93)
+            if (j := np.cross(slice[2:4], slice[6:8])) == 0: # := requires Python 3.8 (Blender 2.93)
                 return np.array([np.nan, np.nan], dtype=np.float64)
             else:
-                return slice[0:1] + np.cross(slice[4:5] - slice[0:1], slice[6:7]) / j * slice[2:3]
+                return slice[0:2] + np.cross(slice[4:6] - slice[0:2], slice[6:8]) / j * slice[2:4]
 
-        origins = np.apply_along_axis(eat, 0, pizza)
-        #                                  ^ This is the slice angle, not the amount of pizza.
-        
-        return origins[:, 0], origins[:, 1], is_complete
+        origin = np.apply_along_axis(eat, 1, pizza)
+
+        return origin[:, 0], origin[:, 1]
 
     @staticmethod
-    def _step_18__check_scale_origins(origins_x, origins_y, do_plot):
+    def _step_08__train_origin_estimator_per_frame(origin_x, origin_y):
         """
         Parameters
         ----------
-        origins_x : npt.NDArray[float64]
-        origins_y : npt.NDArray[float64]
-            1D array including the nans.
-        do_plot : bool
-            NCAAEExportSettings.do_statistics.
-        
+        origin_x : npt.NDArray[float64]
+        origin_y : npt.NDArray[float64]
+            Origin array of the frame, not empty and not all filled with nans.
+
         Returns
         -------
-        is_found : bool
-        nan_percent : float or None
-            None if not NCAAEExportSettings.do_statistics.
-        scalars_x : npt.NDArray[float64] or None
-        scalars_y : npt.NDArray[float64] or None
-            [35, 65, 30, 70]. None if not NCAAEExportSettings.do_statistics.
-
+        origin_estimator : sklearn.base.BaseEstimator
+            Origin estimator.
         """
-        import numpy as np
+        return None
 
-        nans = np.count_nonzero(np.isnan(origins_x))
-        nan = nans / origins_x.shape[0]
+    # @staticmethod
+    # def _step_18_try_to_find_scale_origin_and_count_scale_koma_uchi(position_x, position_y, movement_x, movement_y, ratio_x, ratio_y, max_koma_uchi, do_plot):
+    #     """
+    #     Pick random pairs of movements from the position array and try to find
+    #     the scale origin for every frame.
+    #     Decide if the scale method or the pure x/y method is suitable for the
+    #     clip. It will slice the clip into multiple sections if different
+    #     methods are suitable for difference sections of the clip.
+    #     It will also count the scale コマ打ち, while position コマ打ち will be
+    #     calculated in other functions.
+    #     [Step 18]
 
-        # https://en.wikipedia.org/wiki/Interquartile_range
-        if not do_plot:
-            # If 50% of the markers doesn't work, then 75% of the origins will
-            # have problems. Hope this Q1 = 35, Q3 = 65 setting will work.
-            scalars_x = np.nanpercentile(origins_x, [35, 65]) # np.nanpercentile requires numpy version 1.9.0
-            scalars_y = np.nanpercentile(origins_y, [35, 65])
-        else: # do_plot
-            scalars_x = np.nanpercentile(origins_x, [35, 65, 30, 70])
-            scalars_y = np.nanpercentile(origins_y, [35, 65, 30, 70])
+    #     Parameters
+    #     ----------
+    #     position_x : npt.NDArray[float64]
+    #     position_y : npt.NDArray[float64]
+    #     movement_x : npt.NDArray[float64]
+    #     movement_y : npt.NDArray[float64]
+    #         The position and movement arrays likely coming from Step 04.
+    #     ratio_x : float
+    #     ratio_y : float
+    #     max_koma_uchi : int
+    #         NCAAEExportSettings.max_koma_uchi if NCAAEExportSettings.do_koma_uchi else 1.
+    #     do_plot : bool
+    #         NCAAEExportSettings.do_statistics.
 
-        is_found = scalars_x[1] - scalars_x[0] < 0.20 and \
-                   scalars_y[1] - scalars_y[0] < 0.20 and \
-                   nan < 0.25
-                
-        if not do_plot:
-            return is_found, None, None, None
-        else: # do_plot
-            return is_found, nan, scalars_x, scalars_y
+    #     Returns
+    #     -------
+    #     sections : list[tuple[int, NCAAEExportExport._method]]
+    #         A list of (frame, method)
+    #         This list only records the edges, or the frame when the method
+    #         changes from one to another.
+    #     scale_koma_uchi : list[tuple[int, int]]
+    #         A list of (frame, koma_uchi)
+    #         This list only records the edges.
+    #     origins_x : npt.NDArray[npt.NDArray[float64] or None]
+    #     origins_y : npt.NDArray[npt.NDArray[float64] or None]
+
+    #     """
+    #     import numpy as np
         
-    @staticmethod
-    def _step_18__plot():
-        pass
+    #     frames = movement_x.shape[0]
+    #     origins_x # TODO
+    #     origins_y # TODO 
+    #     prev = NCAAEExportExport._method.UNDEFINED
+    #     for i in range(frames // 2, frames):
+    #         prev, origins_x, origins_y, is_complete, nan_percent, scalars_x, scalars_y \
+    #             = NCAAEExportExport._step_18__call_search_scale_origins(position_x[i], position_y[i], movement_x[i], movement_y[i], prev, do_plot)
+
+
+    #     # scale_koma_uchi is for return, just return the current stats
+    #     # TODO finish this for
+    #     # TODO matplotlib
+        
+    # @staticmethod
+    # def _step_18__call_search_scale_origins(position_x, position_y, movement_x, movement_y, prev_method, do_plot):
+    #     """
+    #     Parameters
+    #     ----------
+    #     position_x : npt.NDArray[float64]
+    #     position_y : npt.NDArray[float64]
+    #     movement_x : npt.NDArray[float64]
+    #     movement_y : npt.NDArray[float64]
+    #         1D array for the frame please.
+    #     prev_method : NCAAEExportExport._method
+    #     do_plot : bool
+    #         NCAAEExportSettings.do_statistics.
+        
+    #     Returns
+    #     -------
+    #     method : NCAAEExportExport._method
+    #     origins_x : npt.NDArray[float64]
+    #     origins_y : npt.NDArray[float64]
+    #     is_complete : bool
+    #         Complete set of origins.
+    #     nan_percent : float or None
+    #         None if not NCAAEExportSettings.do_statistics.
+    #     scalars_x : npt.NDArray[float64] or None
+    #     scalars_y : npt.NDArray[float64] or None
+    #         [35, 65, 30, 70]. None if not NCAAEExportSettings.do_statistics.
+
+    #     """
+    #     available_indexes = np.where(~np.isnan(movement_x))
+    #     position_x_available = position_x[available_indexes]
+    #     position_y_available = position_y[available_indexes]
+    #     movement_x_available = movement_x[available_indexes]
+    #     movement_y_available = movement_y[available_indexes]
+
+    #     if prev_method == NCAAEExportExport._method.UNDEFINED:
+    #         origins_x, origins_y, is_complete \
+    #             = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
+    #         is_found, nan_percent, scalars_x, scalars_y \
+    #             = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
+    #     else:
+    #         origins_x, origins_y, is_complete \
+    #             = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available, 21)
+    #         is_found, nan_percent, scalars_x, scalars_y \
+    #             = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
+    #         if NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y != prev_method and not is_complete:
+    #             origins_x, origins_y, is_complete \
+    #                 = NCAAEExportExport._step_18__calculate_scale_origins(position_x_available, position_y_available, movement_x_available, movement_y_available)
+    #             is_found, nan_percent, scalars_x, scalars_y \
+    #                 = NCAAEExportExport._step_18__check_scale_origins(origins_x, origins_y, do_plot)
+
+    #     return NCAAEExportExport._method.SCALE_X_Y if is_found else NCAAEExportExport._method.PURE_X_Y, origins_x, origins_y, is_complete, nan_percent, scalars_x, scalars_y
+        
+    # @staticmethod
+    # def _step_18__calculate_scale_origins(position_x, position_y, movement_x, movement_y, max_sample_size=0):
+    #     """
+    #     Parameters
+    #     ----------
+    #     position_x : npt.NDArray[float64]
+    #     position_y : npt.NDArray[float64]
+    #     movement_x : npt.NDArray[float64]
+    #     movement_y : npt.NDArray[float64]
+    #         1D array without NaN please.
+    #     max_sample_size: int
+    #         0 if you want to calculate through all the pairs.
+        
+    #     Returns
+    #     -------
+    #     origins_x : npt.NDArray[float64]
+    #     origins_y : npt.NDArray[float64]
+    #     is_complete : bool
+
+    #     """
+    #     import numpy as np
+            
+    #     select = NCAAEExportExport._triangular_number(position_x.shape[0])
+    #     if max_sample_size != 0 and select.full_size > max_sample_size:
+    #         first_indexes, second_indexes = select.get_sample_pairs(max_sample_size)
+    #         is_complete = False
+    #     else:
+    #         first_indexes, second_indexes = select.get_complete_pairs()
+
+    #     pizza = np.column_stack((position_x[first_indexes],
+    #                              position_y[first_indexes],
+    #                              movement_x[first_indexes],
+    #                              movement_y[first_indexes],
+    #                              position_x[second_indexes],
+    #                              position_y[second_indexes],
+    #                              movement_x[second_indexes],
+    #                              movement_y[second_indexes]))
+        
+    #     # https://stackoverflow.com/questions/563198/
+    #     def eat(slice):
+    #         if (j := np.cross(slice[2:3], slice[6:7])) == 0: # := requires Python 3.8 (Blender 2.93)
+    #             return np.array([np.nan, np.nan], dtype=np.float64)
+    #         else:
+    #             return slice[0:1] + np.cross(slice[4:5] - slice[0:1], slice[6:7]) / j * slice[2:3]
+
+    #     origins = np.apply_along_axis(eat, 0, pizza)
+    #     #                                  ^ This is the slice angle, not the amount of pizza.
+        
+    #     return origins[:, 0], origins[:, 1], is_complete
+
+    # @staticmethod
+    # def _step_18__check_scale_origins(origins_x, origins_y, do_plot):
+    #     """
+    #     Parameters
+    #     ----------
+    #     origins_x : npt.NDArray[float64]
+    #     origins_y : npt.NDArray[float64]
+    #         1D array including the nans.
+    #     do_plot : bool
+    #         NCAAEExportSettings.do_statistics.
+        
+    #     Returns
+    #     -------
+    #     is_found : bool
+    #     nan_percent : float or None
+    #         None if not NCAAEExportSettings.do_statistics.
+    #     scalars_x : npt.NDArray[float64] or None
+    #     scalars_y : npt.NDArray[float64] or None
+    #         [35, 65, 30, 70]. None if not NCAAEExportSettings.do_statistics.
+
+    #     """
+    #     import numpy as np
+
+    #     nans = np.count_nonzero(np.isnan(origins_x))
+    #     nan = nans / origins_x.shape[0]
+
+    #     # https://en.wikipedia.org/wiki/Interquartile_range
+    #     if not do_plot:
+    #         # If 50% of the markers doesn't work, then 75% of the origins will
+    #         # have problems. Hope this Q1 = 35, Q3 = 65 setting will work.
+    #         scalars_x = np.nanpercentile(origins_x, [35, 65]) # np.nanpercentile requires numpy version 1.9.0
+    #         scalars_y = np.nanpercentile(origins_y, [35, 65])
+    #     else: # do_plot
+    #         scalars_x = np.nanpercentile(origins_x, [35, 65, 30, 70])
+    #         scalars_y = np.nanpercentile(origins_y, [35, 65, 30, 70])
+
+    #     is_found = scalars_x[1] - scalars_x[0] < 0.20 and \
+    #                scalars_y[1] - scalars_y[0] < 0.20 and \
+    #                nan < 0.25
+                
+    #     if not do_plot:
+    #         return is_found, None, None, None
+    #     else: # do_plot
+    #         return is_found, nan, scalars_x, scalars_y
+        
+    # @staticmethod
+    # def _step_18__plot():
+    #     pass
     
     @staticmethod
     def _step_2C_find_scale_origin_and_calculate_scale():
@@ -553,6 +718,7 @@ class NCAAEExport(bpy.types.Panel):
         
         row = layout.row()
         row.scale_y = 2
+        row.enabled = len(context.edit_movieclip.tracking.tracks) >= 1
         row.operator("movieclip.nc_aae_export_export")
 
     @classmethod
@@ -567,7 +733,7 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
     bl_label = "Install dependencies"
     bl_description = "NC AAE Export requires additional packages to be installed.\nBy clicking this button, NC AAE Export will download and install " + \
                      (" and ".join([", ".join(["pip"] + [module[1] for module in modules[:-1]]), modules[-1][1]]) if len(modules) != 0 else "pip") + \
-                     " into your Blender distribution"
+                     " into your Blender distribution.\nThis process might take up to 3 minutes. Your Blender will freeze during the process"
     bl_idname = "preference.nc_aae_export_register_install_dependencies"
     bl_options = {"REGISTER", "INTERNAL"}
 
@@ -579,13 +745,13 @@ class NCAAEExportRegisterInstallDependencies(bpy.types.Operator):
 
         if os.name == "nt":
             self._execute_nt(context)
-            
-            for module in modules:
-                if importlib.util.find_spec(module[0]) == None:
-                    return {'FINISHED'}
         else:
             subprocess.run([sys.executable, "-m", "ensurepip"], check=True) # sys.executable requires Blender 2.93
             subprocess.run([sys.executable, "-m", "pip", "install"] + [module[1] + ">=" + module[2] if module[2] != "" else module[1] for module in modules], check=True)
+            
+        for module in modules:
+            if importlib.util.find_spec(module[0]) == None:
+                return {'FINISHED'}
 
         global is_dependencies_ready      
         is_dependencies_ready = True
@@ -728,7 +894,7 @@ if __name__ == "__main__":
 #                 startrot = None
 
 #                 data = []
-				
+
 #                 f.write("Adobe After Effects 6.0 Keyframe Data\r\n\r\n")
 #                 f.write("\tUnits Per Second\t{0:.3f}\r\n".format(fps))
 #                 f.write("\tSource Width\t{0}\r\n".format(clip.size[0]))
