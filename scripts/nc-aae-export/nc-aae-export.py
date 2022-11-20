@@ -102,9 +102,19 @@ class NCAAEExportExport(bpy.types.Operator):
     bl_idname = "movieclip.nc_aae_export_export"
     
     class _method(Enum):
+        # The initial value. ValueError should be raised if a frame is still
+        # UNDEFINTED after Step 18
         UNDEFINED = -1
-        PURE_X_Y = 0
-        SCALE_X_Y = 1
+        # The frame type cannot be determined. Final smoothing is required to
+        # generate the frame
+        UNDETERMINED = 0
+        # The frame doesn't have any tracking markers
+        NOTHING = 1
+        # Pure x/y, including still frames
+        PURE_X_Y = 2
+        # Scale x/y
+        SCALE_X_Y = 4
+        SCLAE_X_Y_UNSURE = 5
 
     class _triangular_number:
         # https://en.wikipedia.org/wiki/Triangular_number
@@ -274,8 +284,7 @@ class NCAAEExportExport(bpy.types.Operator):
         # 
         # Also, on the topic of precision, NC AAE Export uses float64 across
         # the whole script
-        position = np.empty((clip.frame_duration, len(clip.tracking.tracks), 2), dtype=np.float64)
-        position.fill(np.nan)
+        position = np.full((clip.frame_duration, len(clip.tracking.tracks), 2), np.nan, dtype=np.float64)
         
         # This will become the slowest step of all the procedures
         for i, track in enumerate(clip.tracking.tracks):
@@ -320,8 +329,6 @@ class NCAAEExportExport(bpy.types.Operator):
             Position and movement array without nans.
         origin : npt.NDArray[npt.NDArray[float64]]
             Origin array.
-        filtered_origin : npt.NDArray[npt.NDArray[float64]]
-            Origin array after removing outliers.
 
         """
         import numpy as np
@@ -330,8 +337,6 @@ class NCAAEExportExport(bpy.types.Operator):
         reduced_position = np.empty(frames, dtype=object)
         reduced_movement = np.empty(frames, dtype=object)
         origin = np.empty(frames, dtype=object)
-        reduced_origin = np.empty(frames, dtype=object)
-        origin_estimator = np.empty(frames, dtype=object)
 
         for frame in range(0, frames):
             reduced_position[frame], reduced_movement[frame] \
@@ -342,24 +347,11 @@ class NCAAEExportExport(bpy.types.Operator):
                 origin[frame] \
                     = NCAAEExportExport._step_08__calculate_origin_array_per_frame( \
                           reduced_position[frame], reduced_movement[frame])
-                reduced_origin[frame] \
-                    = NCAAEExportExport._step_08__reduce_origin_array_per_frame( \
-                          origin[frame])
             else:
                 origin[frame] \
                     = np.empty((0, 2), dtype=np.float64)
-                reduced_origin[frame] \
-                    = np.empty((0, 2), dtype=np.float64)
-            
-            if reduced_origin[frame].shape[0] >= 1:
-                filtered_origin[frame] \
-                    = NCAAEExportExport._step_08__remove_outliers_from_origin_array_per_frame( \
-                          reduced_origin[frame])
-            else:
-                filtered_origin[frame] = \
-                    = np.empty((0, 2), dtype=np.float64)
 
-        return reduced_position, reduced_movement, origin, filtered_origin
+        return reduced_position, reduced_movement, origin
 
     @staticmethod
     def _step_08__reduce_position_and_movement_array_per_frame(position, movement):
@@ -419,61 +411,166 @@ class NCAAEExportExport(bpy.types.Operator):
         return np.apply_along_axis(eat, 1, pizza)
 
     @staticmethod
-    def _step_08__reduce_origin_array_per_frame(origin):
-        """
-        Parameters
-        ----------
-        origin : npt.NDArray[float64]
-            The origin array of the frame.
-
-        Returns
-        -------
-        reduced_origin : npt.NDArray[float64]
-            Origin array without nans.
-        
-        """
-        import numpy as np
-
-        return origin[np.nonzero(~np.isnan(origin[:, 0]))]
-
-    @staticmethod
-    def _step_08__remove_outliers_from_origin_array_per_frame(reduced_origin):
-        """
-        Parameters
-        ----------
-        reduced_origin : npt.NDArray[float64]
-            Origin array of the frame, not empty and not all filled with nans.
-
-        Returns
-        -------
-        origin_estimator : sklearn.base.BaseEstimator
-            Origin estimator.
-
-        """
-        import numpy as np
-        from sklearn.neighbors import LocalOutlierFactor
-
-        clf = LocalOutlierFactor(n_neighbors=np.ceil(reduced_origin.shape[0] / 3).astype(int)) # LocalOutlierFactor contamination parameter requires sklearn version 0.22
-        estimation = clf.fit_predict(reduced_origin)
-
-        return reduced_origin[np.nonzero(estimation == 1)]
-
-    @staticmethod
-    def _step_18_decide_proper_method_and_count_scale_koma_uchi(filtered_origin, max_koma_uchi):
+    def _step_18_decide_proper_method_and_count_scale_koma_uchi(reduced_movement, origin, max_koma_uchi):
         """
         Decide if the scale x/y method or the pure x/y method is suitable for
         each frame and count the scale コマ打ち. Position コマ打ち will be calculated
         in later functions. [Step 18]
 
-        """
-        # Two markers will surely be enough to record a scaling, but if I only have one set of coordinates in the origin array, 
-        # how can I differentiate it from pure x/y move?
-
-        # No, three is the minimum.
-
-        # No, three is definitely not okay. You can't confidently say it is not scale x/y in the case when all three origins are apart,
+        Parameters
+        ----------
+        reduced_movement : npt.NDArray[npt.NDArray[float64]]
+        origin : npt.NDArray[npt.NDArray[float64]]
+            Reduced movement array and origin array likely coming from step
+            08.
+        max_koma_uchi : bool
+            NCAAEExportSettings.max_koma_uchi.
         
-        # Four?
+        """
+        import numpy as np
+        
+        frames = movement.shape[0]
+        method = np.empty(frames, dtype=object)
+        filtered_origin = np.empty(frames, dtype=object)
+
+        for frame in range(0, frames):
+            if reduced_movement[frame].shape[0] == 0:
+                filtered_origin[frame] \
+                    = np.empty((0, 2), dtype=np.float64)
+                method[frame] \
+                    = NCAAEExportExport._method.NOTHING
+
+            elif reduced_movement[frame].shape[0] == 1:
+                filtered_origin[frame] \
+                    = np.empty((0, 2), dtype=np.float64)
+                method[frame] \
+                    = NCAAEExportExport._method.UNDETERMINED
+
+            elif reduced_movement[frame].shape[0] == 2:
+                filtered_origin[frame] \
+                    = np.empty((0, 2), dtype=np.float64)
+                method[frame] \
+                    = NCAAEExportExport._method.UNDETERMINED
+            
+            elif reduced_movement[frame].shape[0] == 3:
+                if (function_return \
+                        := NCAAEExportExport._step_18__check_origin_array_for_possible_scale_origin( \
+                               origin[frame]))[0]:
+                    filtered_origin[frame] \
+                        = function_return[1]
+                    method[frame] \
+                        = NCAAEExportExport._method.SCLAE_X_Y_UNSURE
+                else:
+                    filtered_origin[frame] \
+                        = np.empty((0, 2), dtype=np.float64)
+                    method[frame] \
+                        = NCAAEExportExport._method.UNDETERMINED
+                
+            else: # movement[frame].shape[0] >= 3
+                filtered_origin[frame] \
+                    = NCAAEExportExport._step_18__reduce_origin_array_and_remove_outliers_per_frame( \
+                          origin[frame])
+
+                if (function_return \
+                        := NCAAEExportExport._step_18__check_origin_array_for_possible_scale_origin(\
+                               origin[frame]))[0]:
+                    filtered_origin[frame] \
+                        = function_return[1]
+                    method[frame] \
+                        = NCAAEExportExport._method.SCLAE_X_Y
+                        
+                else:
+                    filtered_origin[frame] \
+                        = function_return[1]
+                    method[frame] \
+                        = NCAAEExportExport._method.PURE_X_Y
+                        
+        # koma_uchi
+
+    @staticmethod
+    def _step_18__check_origin_array_for_possible_scale_origin(origin):
+        """
+        Parameters
+        ----------
+        origin : npt.NDArray[float64]
+            Origin array of the frame. Not empty.
+
+        Returns
+        -------
+        is_exisiting : bool
+            True if the scale origin is likely exisiting.
+        filtered_origin : npt.NDArray[float64]
+            The points in the origin array that is in the same cluster as the
+            possible scale origin.
+
+        """
+        import numpy as np
+        from sklearn.cluster import DBSCAN
+
+        clustering = DBSCAN(min_samples=np.ceil(origin.shape[0] * 0.20).astype(int), eps=0.20)
+        estimation = clustering.fix_predict(origin)
+
+        cluster_sizes = np.bincount(estimation + 1)[1:]
+        if cluster_sizes.shape[0] == 0:
+            return False, np.empty((0, 2), dtype=np.float64)
+        elif cluster_sizes.shape[0] == 1:
+            return True, origin[np.nonzero(estimation == 0)]
+        else:
+            index_max = np.argmax(cluster_sizes)
+            for index in range(cluster_sizes.shape[0]):
+                if index == index_max:
+                    continue
+
+                if not cluster_size[index_max] > cluster_sizes[index] * 4/3:
+                    return False, origin[np.nonzero(estimation == index_max)]
+            else:
+                return True, origin[np.nonzero(estimation == index__max)]
+
+
+
+
+    # @staticmethod
+    # def _step_18__reduce_origin_array_and_remove_outliers_per_frame(origin):
+    #     """
+    #     Parameters
+    #     ----------
+    #     origin : npt.NDArray[float64]
+    #         Origin array of the frame. Not empty.
+
+    #     Returns
+    #     -------
+    #     origin_estimator : sklearn.base.BaseEstimator
+    #         Origin estimator.
+
+    #     """
+    #     import numpy as np
+    #     from sklearn.neighbors import LocalOutlierFactor
+
+    #     reduced_origin = origin[np.nonzero(~np.isnan(origin[:, 0]))]
+
+    #     clf = LocalOutlierFactor(n_neighbors=np.ceil(reduced_origin.shape[0] / 3).astype(int)) # LocalOutlierFactor contamination parameter requires sklearn version 0.22
+    #     estimation = clf.fit_predict(reduced_origin)
+
+    #     return reduced_origin[np.nonzero(estimation == 1)]
+
+    # @staticmethod
+    # def _step_18__check_if_scale_origin_is_clear(origin, filtered_origin):
+    #     """
+    #     Parameters
+    #     ----------
+    #     origin : npt.NDArray[float64]
+    #     filtered_origin : npt.NDArray[float64]
+    #         Origin and filtered origin array of the frame. Not empty.
+
+    #     Returns
+    #     -------
+    #     is_existing : bool
+
+    #     """
+    #     import numpy as np
+
+    #     if np.ceil(origin.shape[0] * 0.20) <= filtered_origin.shape[0]:
+    #         if np.all(np.amax(filtered_origin[frame], axis=0) - np.amin(filtered_origin[frame], axis=0) < [0.25, 0.25]):
 
 
     # @staticmethod
