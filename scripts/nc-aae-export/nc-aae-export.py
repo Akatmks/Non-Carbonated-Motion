@@ -85,9 +85,6 @@ class NCAAEExportSettings(bpy.types.PropertyGroup):
     do_smoothing: bpy.props.BoolProperty(name="Smoothing",
                                          description="Perform final smoothing.\nDo not enable this option if you are tracking a shaking scene",
                                          default=False)
-    do_predictive_smoothing: bpy.props.BoolProperty(name="Predictive smoothing",
-                                                    description="Enable predictive final smoothing.\nThis allows final smoothing to artificially construct new data when it suspects existing data to be imprecise or existing data is missing. It will be helpful in cases such as when the tracking target fades or blurs out. It will also improve overall precision, especially when the movement per frame is small",
-                                                    default=False)
     do_statistics: bpy.props.BoolProperty(name="Statistics",
                                           description="Generate statistics images alongside AAE data",
                                           default=False)
@@ -208,15 +205,18 @@ class NCAAEExportExport(bpy.types.Operator):
     @dataclass
     class _section:
         # Info
-        start_frame: int
-        end_frame: int # not included
+        start_frame: int = -1
+        end_frame: int = -1 # not included
         type: object = None
         koma_uchi: int = 1
 
         # Data
+        # npt.NDArray[npt.NDArray[float64]]
         reduced_movement: object = None
-        position: object = None
-        filtered_origin: object = None
+        # npt.NDArray[float64]
+        scale_origin: object = None
+        # npt.NDArray[float64]
+        scaling: object = None
 
     def execute(self, context):
         clip = context.edit_movieclip
@@ -229,8 +229,8 @@ class NCAAEExportExport(bpy.types.Operator):
             = NCAAEExportExport._step_04_create_position_and_movement_array_from_tracking_markers( \
                   clip, ratio)
         
-        reduced_position, reduced_movement, origin, filtered_origin \
-            = NCAAEExportExport._step_08_reduce_position_and_movement_array_and_calculate_origin_array_and_filtered_origin_array( \
+        reduced_position, reduced_movement, origin, scaling \
+            = NCAAEExportExport._step_08_reduce_position_and_movement_array_and_calculate_origin_and_scaling_array( \
                   position, movement)
 
         print(clip.filepath)
@@ -326,17 +326,21 @@ class NCAAEExportExport(bpy.types.Operator):
         # +-----------+------------------------------------------+
         # |           |           Track 0  Track 1  Track 2      |
         # +-----------+------------------------------------------+
-        # | Frame 0/1 | array([[  [x ,y],  [x, y],  [x, y]   ],  |
-        # | Frame 1/2 |        [  [x ,y],  [x, y],  [x, y]   ],  |
-        # | Frame 2/3 |        [  [x ,y],  [x, y],  [x, y]   ],  |
-        # | Frame 3/4 |        [  [x ,y],  [x, y],  [x, y]   ]]) |
+        # | Frame 0/1 | array([[  [x, y],  [x, y],  [x, y]   ],  |
+        # | Frame 1/2 |        [  [x, y],  [x, y],  [x, y]   ],  |
+        # | Frame 2/3 |        [  [x, y],  [x, y],  [x, y]   ],  |
+        # | Frame 3/4 |        [  [x, y],  [x, y],  [x, y]   ],  |
+        # | Frame 4/  |        [  [x, y],  [x, y],  [x, y]   ]]) |
         # +-----------+                                          |
         # | size -= 1 |                                          |
         # +-----------+------------------------------------------+
-        return position, np.diff(position, axis=0)
+        movement = np.diff(position, axis=0)
+        movement = np.vstack((movement, movement[-1]))
+
+        return position, movement
 
     @staticmethod
-    def _step_08_reduce_position_and_movement_array_and_calculate_origin_array_and_filtered_origin_array(position, movement):
+    def _step_08_reduce_position_and_movement_array_and_calculate_origin_and_scaling_array(position, movement):
         """
         Remove the nans in the position and movement array and calculate the
         origin array. [Step 08]
@@ -354,6 +358,8 @@ class NCAAEExportExport(bpy.types.Operator):
             Position and movement array without nans.
         origin : npt.NDArray[npt.NDArray[float64]]
             Origin array.
+        scaling : npt.NDArray[npt.NDArray[float64]]
+            Scaling array.
 
         """
         import numpy as np
@@ -362,6 +368,7 @@ class NCAAEExportExport(bpy.types.Operator):
         reduced_position = np.empty(frames, dtype=object)
         reduced_movement = np.empty(frames, dtype=object)
         origin = np.empty(frames, dtype=object)
+        scaling = np.empty(frames, dtype=object)
 
         for frame in range(frames):
             reduced_position[frame], reduced_movement[frame] \
@@ -369,14 +376,16 @@ class NCAAEExportExport(bpy.types.Operator):
                       position[frame], movement[frame])
             
             if reduced_movement[frame].shape[0] >= 2:
-                origin[frame] \
+                origin[frame], scaling[frame] \
                     = NCAAEExportExport._step_08__calculate_origin_array_per_frame( \
                           reduced_position[frame], reduced_movement[frame])
             else:
                 origin[frame] \
                     = np.empty((0, 2), dtype=np.float64)
+                scaling[frame] \
+                    = np.empty(0, dtype=np.float64)
 
-        return reduced_position, reduced_movement, origin
+        return reduced_position, reduced_movement, origin, scaling
 
     @staticmethod
     def _step_08__reduce_position_and_movement_array_per_frame(position, movement):
@@ -401,7 +410,7 @@ class NCAAEExportExport(bpy.types.Operator):
         return position[available_mask], movement[available_mask]
 
     @staticmethod
-    def _step_08__calculate_origin_array_per_frame(reduced_position, reduced_movement):
+    def _step_08__calculate_origin_and_scaling_array_per_frame(reduced_position, reduced_movement):
         """
         Parameters
         ----------
@@ -414,17 +423,20 @@ class NCAAEExportExport(bpy.types.Operator):
         -------
         origin : npt.NDArray[float64]
             Origin array.
+        scaling : npt.NDArray[float64]
+            Scaling array.
 
         """
         import numpy as np
+        import numpy.linalg as LA
 
         select = NCAAEExportExport._triangular_number(reduced_movement.shape[0])
         first_indexes, second_indexes = select.get_complete_pairs()
 
-        pizza = np.column_stack((reduced_position[first_indexes],
-                                 reduced_movement[first_indexes],
-                                 reduced_position[second_indexes],
-                                 reduced_movement[second_indexes]))
+        pizza = np.column_stack(((first_reduced_position := reduced_position[first_indexes]),
+                                 (first_reduced_movement := reduced_movement[first_indexes]),
+                                 (second_reduced_position := reduced_position[second_indexes]),
+                                 (second_reduced_movement := reduced_movement[second_indexes])))
 
         # https://stackoverflow.com/questions/563198/
         def eat(slice):
@@ -433,10 +445,17 @@ class NCAAEExportExport(bpy.types.Operator):
             else:
                 return slice[0:2] + np.cross(slice[4:6] - slice[0:2], slice[6:8]) / j * slice[2:4]
 
-        return np.apply_along_axis(eat, 1, pizza)
+        origin = np.apply_along_axis(eat, 1, pizza)
+
+        distance = LA.norm((diff_reduced_position := first_reduced_position - second_reduced_position), axis=1) # axis requires numpy version 1.8.0
+        distance_next = LA.norm(diff_reduced_position + first_reduced_movement - second_reduced_movement, axis=1)
+
+        scaling = distance_next / distance
+
+        return origin, scaling
 
     @staticmethod
-    def _step_18_decide_proper_method_and_count_scale_koma_uchi(position, reduced_movement, origin, do_koma_uchi, max_koma_uchi, do_statistics, ratio):
+    def _step_18_decide_proper_method_and_count_scale_koma_uchi(reduced_movement, origin, scaling, do_koma_uchi, max_koma_uchi, do_statistics, ratio):
         """
         Decide if the scale x/y method or the pure x/y method is suitable for
         each frame and count the scale コマ打ち. Position コマ打ち will be calculated
@@ -444,11 +463,14 @@ class NCAAEExportExport(bpy.types.Operator):
 
         Parameters
         ----------
-        position : npt.NDArray[npt.NDArray[float64]]
         reduced_movement : npt.NDArray[npt.NDArray[float64]]
         origin : npt.NDArray[npt.NDArray[float64]]
-            Reduced movement array and origin array likely coming from step
-            08.
+        scaling : npt.NDArray[npt.NDArray[float64]]
+            Reduced movement array, origin array and scaling array likely
+            coming from step 08.
+        do_smoothing : bool
+            NCAAEExportSettings.do_smoothing
+
         do_koma_uchi : bool
             NCAAEExportSettings.do_koma_uchi.
         max_koma_uchi : int
@@ -468,15 +490,18 @@ class NCAAEExportExport(bpy.types.Operator):
         
         frames = reduced_movement.shape[0]
 
-        frame_type, origin_cluster_sizes, origin_cluster_centroids \
+        frame_type, origin_cluster_sizes, origin_cluster_centroids, cluster_scaling \
             = NCAAEExportExport._step_18__check_origin_array( \
-                  reduced_movement, origin)
+                  reduced_movement, origin, scaling)
 
         sections \
-            = NCAAEExportExport._step_18__detect_section()
+            = NCAAEExportExport._step_18__detect_section( \
+                  reduced_movement, \
+                  frame_type, origin_cluster_sizes, origin_cluster_centroids, cluster_scaling, \
+                  do_smoothing)
 
     @staticmethod
-    def _step_18__check_origin_array(reduced_movement, origin):
+    def _step_18__check_origin_array(reduced_movement, origin, scaling):
         """
         Parameters
         ----------
@@ -484,12 +509,15 @@ class NCAAEExportExport(bpy.types.Operator):
             Reduced movement array.
         origin : npt.NDArray[npt.NDArray[float64]]
             Origin array.
+        scaling : npt.NDArray[npt.NDArray[float64]]
+            Scaling array.
 
         Returns
         -------
         frame_type : npt.NDArray[NCAAEExportExport._frame_type]
         origin_cluster_sizes : npt.NDArray[npt.NDArray[int]]
         origin_cluster_centroids : npt.NDArray[npt.NDArray[float64]]
+        cluster_scaling : npt.NDArray[npt.NDArray[float64]]
         
         """
         import numpy as np
@@ -498,6 +526,7 @@ class NCAAEExportExport(bpy.types.Operator):
         frame_type = np.empty(frames, dtype=object)
         origin_cluster_sizes = np.empty(frames, dtype=object)
         origin_cluster_centroids = np.empty(frames, dtype=object)
+        cluster_scaling = np.empty(frames, dtype=object)
 
         for frame in range(frames):
             if reduced_movement[frame].shape[0] == 0:
@@ -507,6 +536,8 @@ class NCAAEExportExport(bpy.types.Operator):
                     = np.empty(0, dtype=int)
                 origin_cluster_centroids[frame] \
                     = np.empty((0, 2), dtype=np.float64)
+                cluster_scaling[frame] \
+                    = np.empty(0, dtype=np.float64)
 
             elif reduced_movement[frame].shape[0] == 1:
                 frame_type[frame] \
@@ -515,6 +546,8 @@ class NCAAEExportExport(bpy.types.Operator):
                     = np.empty(0, dtype=int)
                 origin_cluster_centroids[frame] \
                     = np.empty((0, 2), dtype=np.float64)
+                cluster_scaling[frame] \
+                    = np.empty(0, dtype=np.float64)
 
             elif reduced_movement[frame].shape[0] == 2:
                 if origin[frame][0, 0] != np.nan:
@@ -524,6 +557,8 @@ class NCAAEExportExport(bpy.types.Operator):
                         = np.array([1], dtype=int)
                     origin_cluster_centroids[frame] \
                         = origin[frame][0].reshape((1, 2))
+                    cluster_scaling[frame] \
+                        = scaling[frame][0].reshape((1))
                 else:
                     frame_type[frame] \
                         = NCAAEExportExport._frame_type.TWO_NO_ORIGIN
@@ -531,70 +566,115 @@ class NCAAEExportExport(bpy.types.Operator):
                         = np.empty(0, dtype=int)
                     origin_cluster_centroids[frame] \
                         = np.empty((0, 2), dtype=np.float64)
+                    cluster_scaling[frame] \
+                        = np.empty(0, dtype=np.float64)
             
             else: # reduced_movement[frame].shape[0] >= 3
-                frame_type[frame], origin_cluster_sizes[frame], origin_cluster_centroids[frame] \
+                frame_type[frame], \
+                origin_cluster_sizes[frame], \
+                origin_cluster_centroids[frame], \
+                cluster_scaling[frame] \
                     = NCAAEExportExport._step_18__check_origin_array_for_possible_scale_origin_by_frame( \
-                          reduced_movement[frame], origin[frame])
+                          origin[frame], scaling[frame])
             
-        return frame_type, origin_cluster_sizes, origin_cluster_centroids
+        return frame_type, origin_cluster_sizes, origin_cluster_centroids, cluster_scaling
                     
     @staticmethod
-    def _step_18__check_origin_array_for_possible_scale_origin_by_frame(origin):
+    def _step_18__check_origin_array_for_possible_scale_origin_by_frame(origin, scaling):
         """
         Parameters
         ----------
         origin : npt.NDArray[float64]
             Origin array of the frame. Not empty.
+        scaling : npt.NDArray[npt.NDArray[float64]]
+            Scaling array of the frame.
 
         Returns
         -------
         frame_type : NCAAEExportExport._frame_type
         cluster_sizes : npt.NDArray[int]
         cluster_centroids : npt.NDArray[float64]
+        cluster_scaling : npt.NDArray[float64]
 
         """
         import numpy as np
         from sklearn.cluster import DBSCAN
+        from sklearn.neighbors import NearestCentroid, \
+                                      LocalOutlierFactor
 
-        reduced_origin = origin[~np.isnan(origin[:, 0])]
+        reducing_mask = ~np.isnan(origin[:, 0])
+        reduced_origin = origin[reducing_mask]
+        reduced_scaling = scaling[reducing_mask]
 
         clustering = DBSCAN(min_samples=np.ceil(origin.shape[0] * 0.20).astype(int), eps=0.20)
         estimation = clustering.fit_predict(reduced_origin)
         
         inlier_mask = estimation != -1
-        reduced_estimation = estimation[inlier_mask]
+        inlier_origin = reduced_origin[inlier_mask]
+        inlier_estimation = estimation[inlier_mask]
 
         clf = NearestCentroid()
-        clf.fit(reduced_origin[inlier_mask], reduced_estimation)
+        clf.fit(inlier_origin, inlier_estimation)
 
-        cluster_sizes = np.bincount(reduced_estimation)
+        cluster_sizes = np.bincount(inlier_estimation)
         cluster_centroids = clf.centroids_
 
+        cluster_scaling = np.empty((cluster_sizes.shape[0]), dtype=np.float64)
+        for cluster in range(cluster_sizes.shape[0]):
+            clf = LocalOutlierFactor(n_neighbors=np.floor(cluster_sizes[cluster] * 0.80).astype(int))
+            estimation = clf.fit_predict(reduced_scaling_cluster := reduced_scaling[estimation == cluster])
+
+            cluster_scaling[cluster] = np.mean(reduced_scaling_cluster[estimation == 1])
+
         if cluster_sizes.shape[0] == 0:
-            return NCAAEExportExport._frame_type.MANY_ONLY_PURE_X_Y, cluster_sizes, cluster_centroids
+            return NCAAEExportExport._frame_type.MANY_ONLY_PURE_X_Y, cluster_sizes, cluster_centroids, cluster_scaling
         elif cluster_sizes.shape[0] == 1:
-            return NCAAEExportExport._frame_type.MANY_LIKELY_SCALE_X_Y, cluster_sizes, cluster_centroids
+            return NCAAEExportExport._frame_type.MANY_LIKELY_SCALE_X_Y, cluster_sizes, cluster_centroids, cluster_scaling
         else: # cluster_sizes.shape[0] > 1:
             sorted_cluster_sizes = np.sort(cluster_sizes)
-            if sorted_cluster_sizes[-1] > sorted_cluster_sizes[-2] * 4/3:
-                return NCAAEExportExport._frame_type.MANY_LIKELY_SCALE_X_Y, cluster_sizes, cluster_centroids
+            if sorted_cluster_sizes[-1] > sorted_cluster_sizes[-2] * 1.50:
+                return NCAAEExportExport._frame_type.MANY_LIKELY_SCALE_X_Y, cluster_sizes, cluster_centroids, cluster_scaling
             else:
-                return NCAAEExportExport._frame_type.MANY_POSSIBLE_SCALE_X_Y, cluster_sizes, cluster_centroids
+                return NCAAEExportExport._frame_type.MANY_POSSIBLE_SCALE_X_Y, cluster_sizes, cluster_centroids, cluster_scaling
 
     @staticmethod
-    def _step_18__detect_section(position, reduced_movement, origin, frame_type, origin_cluster_sizes, origin_cluster_centroids):
+    def _step_18__detect_section(reduced_position, reduced_movement, frame_type, origin_cluster_sizes, origin_cluster_centroids, cluster_scaling, do_smoothing, do_koma_uchi, max_koma_uchi):
         """
+        Parameters
+        ----------
+        reduced_position : npt.NDArray[npt.NDArray[int]]
+        reduced_movement : npt.NDArray[npt.NDArray[int]]
+        frame_type : npt.NDArray[NCAAEExportExport._frame_type]
+        origin_cluster_sizes : npt.NDArray[npt.NDArray[int]]
+        origin_cluster_centroids : npt.NDArray[npt.NDArray[float64]]
+        cluster_scaling : npt.NDArray[npt.NDArray[float64]]
+        do_smoothing : bool
+            NCAAEExportSettings.do_smoothing
+        do_koma_uchi : bool
+            NCAAEExportSettings.do_koma_uchi
+        max_koma_uchi : int
+            NCAAEExportSettings.max_koma_uchi
+
+        Returns
+        -------
+        sections : list[NCAAEExportExport._section]
         """
+        from collections import deque
         import numpy as np
-        
+
         frames = reduced_movement.shape[0]
-        sections = []
+        early_smoothing_error_margin = 2
+        koma_uchi_keyframe_margin = 1 if do_koma_uchi else 0 # Probably doesn't support value other than 1
+        koma_uchi_koma_margin = max_koma_uchi - koma_uchi_keyframe_margin if do_koma_uchi else 0
+        koma_uchi_error_margin = 1 # Probably also doesn't support any other value than 1.
+        sections = deque()
 
         f = 0
         trace_backward = 0
         while f < frames:
-            section = NCAAEExportExport._section(start_frame=f, end_frame=f)
+            section = NCAAEExportExport._section()
+            section.start_frame = f
+
             # If current section ...
             if frame_type[f] == NCAAEExportExport._frame_type.EMPTY:
                 section.type = NCAAEExportExport._section_type.EMPTY
@@ -609,7 +689,8 @@ class NCAAEExportExport(bpy.types.Operator):
                 continue
             # If current section ...
             elif frame_type[f] in (NCAAEExportExport._frame_type.ONE, \
-                                   NCAAEExportExport._frame_type.TWO):
+                                   NCAAEExportExport._frame_type.TWO, \
+                                   NCAAEExportExport._frame_type.TWO_NO_ORIGIN):
                 start_frame_type = frame_type[f]
                 while f < frames:
                     f += 1
@@ -617,8 +698,6 @@ class NCAAEExportExport(bpy.types.Operator):
                         break
                 # If next section ...
                 else:
-                    if trace_backward != 0:
-                        section.start_frame = sections[-trace_backward].start_frame
                     section.end_frame = f
 
                     # If previous section ...
@@ -632,19 +711,83 @@ class NCAAEExportExport(bpy.types.Operator):
                         sections[-trace_backward-1].type in (NCAAEExportExport._section_type.EMPTY, \
                                                              NCAAEExportExport._section_type.PURE_X_Y, \
                                                              NCAAEExportExport._section_type.SCALE_X_Y_KOMA_UCHI)):
+                        if trace_backward != 0:
+                            section.start_frame = sections[-trace_backward].start_frame
+                        
                         section.type = NCAAEExportExport._section_type.PURE_X_Y
                         section.reduced_movement = reduced_movement[section.start_frame:section.end_frame]
-                    else: # Previous section's type is SCALE_X_Y
+                    # If previous section ...
+                    elif trace_backward == 0 and \
+                         sections[-1].type == NCAAEExportExport._section_type.SCALE_X_Y or \
+                         trace_backward != 0 and \
+                         sections[-trace_backward-1].type == NCAAEExportExport._section_type.SCALE_X_Y:
                         section.type = NCAAEExportExport._section_type.SCALE_X_Y
-                        section.position = position[section.start_frame:section.end_frame]
-                        section.filtered_origin = origin_cluster_centroids[section.start_frame:section.end_frame][0]
+
+                        def func_(start_frame, end_frame, \
+                                  reduced_position, reduced_movement, \
+                                  frame_type, origin_cluster_centroids, cluster_scaling, \
+                                  previous_frame_scale_origin):
+                            import numpy as np
+                            import numpy.linalg as LA
+
+                            if frame_type[start_frame] in (NCAAEExportExport._frame_type.ONE, \
+                                                           NCAAEExportExport._frame_type.TWO_NO_ORIGIN):
+                                if do_smoothing:
+                                    scale_origin = np.full((start_frame - end_frame, 2), np.nan, dtype=np.float64)
+                                    scaling = np.full((start_frame - end_frame), np.nan, dtype=np.float64)
+                                else:
+                                    scale_origin = np.full((start_frame - end_frame, 2), previous_frame_scale_origin, dtype=np.float64)
+                                    scaling = np.mean(LA.norm((d_ := reduced_position[start_frame:end_frame] - previous_frame_scale_origin) + reduced_movement[start_frame:end_frame], axis=1) / \
+                                                      LA.norm(d_, axis=1), axis=1)
+                            elif frame_type[start_frame] == NCAAEExportExport._frame_type.TWO:
+                                scale_origin = np.stack(origin_cluster_centroids[start_frame:end_frame])[:, 0]
+                                scaling = np.stack(cluster_scaling[start_frame:end_frame])[:, 0]
+                            else: raise ValueError
+
+                            return scale_origin, scaling
                         
-                    for t in range(0, trace_backward): # Only if trace_backward != 0
+                        if trace_backward == 0:
+                            section.scale_origin, \
+                            section.scaling \
+                                = func_( \
+                                      section.start_frame, section.end_frame, \
+                                      reduced_position, reduced_movement, \
+                                      frame_type, origin_cluster_centroids, cluster_scaling, \
+                                      sections[-1].scale_origin[-1])
+                        else: # trace_backward != 0
+                            section.scale_origin, \
+                            section.scaling \
+                                = func_( \
+                                      sections[-trace_backward].start_frame, sections[-trace_backward].end_frame, \
+                                      reduced_position, reduced_movement, \
+                                      frame_type, origin_cluster_centroids, cluster_scaling, \
+                                      sections[-trace_backward-1].scale_origin[-1])
+                            for t_ in range(trace_backward-1, 0, -1):
+                                section.scale_origin = np.vstack(((func_return_ := func_( \
+                                                                                       sections[-t_].start_frame, sections[-t_].end_frame, \
+                                                                                       reduced_position, reduced_movement, \
+                                                                                       frame_type, origin_cluster_centroids, cluster_scaling, \
+                                                                                       section.scale_origin[-1]))[0], \
+                                                                  section.scale_origin))
+                                section.scaling = np.vstack((func_return_[1], section.scaling))
+                            section.scale_origin = np.vstack(((func_return_ := func_(\
+                                                                                   section.start_frame, section.end_frame, \
+                                                                                   reduced_position, reduced_movement, \
+                                                                                   frame_type, origin_cluster_centroids, cluster_scaling, \
+                                                                                   section.scale_origin[-1]))[0], \
+                                                              section.scale_origin))
+                            section.scaling = np.vstack((func_return_[1], section.scaling))
+                            section.start_frame = sections[-trace_backward].start_frame
+                    # If previous section ...
+                    else: raise ValueError
+
+                    for _ in range(0, trace_backward):
                         sections.pop()
                     sections.append(section)
                     trace_backward = 0
 
                     continue
+                # If next section ...
                 # We don't know if the next section will be koma uchi or not.
                 # The handling will be happening in the next section instead.
                 section.type[f] == NCAAEExportExport._section_type.UNDETERMINED
@@ -653,13 +796,111 @@ class NCAAEExportExport(bpy.types.Operator):
                 sections.append(section)
 
                 continue
-            elif
+            # If current section ...
+            elif frame_type[f] == NCAAEExportExport._frame_type.MANY_ONLY_PURE_X_Y:
+                section.type = NCAAEExportExport._section_type.PURE_X_Y
+
+                while f < frames:
+                    f += 1
+                    if frame_type[f] != NCAAEExportExport._frame_type.MANY_ONLY_PURE_X_Y
+                        break
+                if trace_backward != 0:
+                    section.start_frame = sections[-trace_backward].start_frame
+                section.end_frame = f
+
+                section.reduced_movement = reduced_movement[section.start_frame:section.end_frame]
+                
+                for _ in range(0, trace_backward):
+                    sections.pop()
+                sections.append(section)
+                trace_backward = 0
+
+                continue
+            # If current section ...
+            elif frame_type[f] in (NCAAEExportExport._frame_type.MANY_LIKELY_SCALE_X_Y, \
+                                   NCAAEExportExport._frame_type.MANY_POSSIBLE_SCALE_X_Y): 
+                while f < frames:
+                    f += 1
+                    if not frame_type[f] in (NCAAEExportExport._frame_type.MANY_LIKELY_SCALE_X_Y, \
+                                             NCAAEExportExport._frame_type.MANY_POSSIBLE_SCALE_X_Y):
+                        break
+                else:
+                    # Do something
+                    continue
+
+                if do_koma_uchi and max_koma_uchi >= 2 and \
+                   f - section.frame_start <= koma_uchi_keyframe_margin + koma_uchi_error_margin and \
+                   frame_type[f] == NCAAEExportExport._frame_type.MANY_ONLY_PURE_X_Y:
+                    k_ = 2
+                    # A koma_uchi should at least be 4 cycles long, and
+                    # All 4 cycles shouldn't contain any EMPTY, and
+                    # The first 3 cycles shouldn't contain any ONE, TWO or TWO_NO_ORIGIN, and
+                    # The first frame of each cycle (keyframe) must be MANY_PROBABLY_SCALE_X_Y or MANY_LIKELY_SCALE_X_Y, and
+                    # Non keyframes should contain equal or less SCALE_X_Y frames than error_margin per cycle, and
+                    # The sum of the error count should be less than 2 within the 4 cycles.
+                    while not (section.frame_start + k_ * 4 <= frames and \
+                               np.all((t_ := frame_type[section.frame_start:section.frame_start + k_ * 4]) != NCAAEExportExport._frame_type.EMPTY) and \
+                               np.all(~np.in1d(t_[:k_ * 3], [NCAAEExportExport._frame_type.ONE, \
+                                                             NCAAEExportExport._frame_type.TWO, \
+                                                             NCAAEExportExport._frame_type.TWO_NO_ORIGIN])) and \
+                               np.all((b_ := np.in1d(t_, [NCAAEExportExport._frame_type.MANY_LIKELY_SCALE_X_Y, \
+                                                          NCAAEExportExport._frame_type.MANY_POSSIBLE_SCALE_X_Y]).reshape((4, k_)))[:, 0]) and \
+                               np.amax((e_ := np.count_nonzero(b_[:, 1:], axis=1))) <= koma_uchi_error_margin and \
+                               np.sum(e_) <= 2):
+                        
+                        if k_ == koma_uchi_keyframe_margin + koma_uchi_koma_margin:
+                            break
+                        k_ += 1
+                    else:
+                        # Keyframe:
+                        #     Non SCALE_X_Y will terminal koma_uchi at the cycle before.
+                        # Non keyframe:
+                        #     EMPTY or frames will terminal koma_uchi at the cycle before.
+                        #     ONE, TWO or TWO_NO_ORIGIN will terminal koma_uchi after the current cycle.
+                        #     error count more than error_margin will terminal koma_uchi at the cycle before.
+                        c_ = np.amin([(cm_ := (frames - section.frame_start) // k_), \
+                                      ci_ if (ci_ := np.argmax(~((b_ := np.in1d((t_ := frame_type[section.frame_start:section.frame_start + k_ * cm_].reshape((-1, k_))), \
+                                                                                [NCAAEExportExport._frame_type.MANY_LIKELY_SCALE_X_Y, \
+                                                                                 NCAAEExportExport._frame_type.MANY_POSSIBLE_SCALE_X_Y]))[:, 0]))) != 0 else cm_, \
+                                      cj_ // (k_ - 1) if (cj_ := np.argmax((tk_ := t_[:, 1:]) == NCAAEExportExport._frame_type.EMPTY)[1]) != 0 else cm_, \
+                                      ck_ // (k_ - 1) + 1 if (ck_ := np.argmax(np.in1d(tk_, \
+                                                                                       [NCAAEExportExport._frame_type.ONE, \
+                                                                                        NCAAEExportExport._frame_type.TWO, \
+                                                                                        NCAAEExportExport._frame_type.TWO_NO_ORIGIN]))) != 0 else cm_, \
+                                      cl_ if (cl_ := np.argmax(np.count_nonzero(b_[:, 1:], axis=1) > koma_uchi_error_margin)) != 0 else cm_])
+
+                        section.end_frame = section.start_frame + c_ * k_
+                        section.koma_uchi = k_
+                        section.reduced_movement = reduced_movement[section.start_frame:section.end_frame].reshape((-1, k_))[:, 1:]
+                        # TODO DECIDE MANY_POSSIBLE_SCALE_X_Y
+                        # TODO DEAL WITH UNDETERMINED
+
+                        sections.append(section)
+
+                        continue
 
 
 
 
 
-        # early_smoothing_frame_margin = 2
+
+                # If next section ...
+                if f - section.frame_start <= early_smoothing_error_margin and \
+                : # next
+
+
+            # If current section ...
+            else: raise ValueError
+
+
+
+
+
+
+
+
+
+        # early_smoothing_error_margin = 2
 
         # edges = np.nonzero(method[:-1] == method[1:] | \
         #                    is_scale_x_y_possible[:-1] == is_scale_x_y_possible[1:])[0] + 1
@@ -713,9 +954,9 @@ class NCAAEExportExport(bpy.types.Operator):
         #     elif method[edges[i]] == NCAAEExportExport._method.PURE_X_Y:
 
 
-        #             if edges[i+1] - edges[i] <= early_smoothing_frame_margin and \
+        #             if edges[i+1] - edges[i] <= early_smoothing_error_margin and \
         #                i+1 != edges.shape[0] - 1 and \
-        #                edges[i+2] - edges[i+1] > early_smoothing_frame_margin:
+        #                edges[i+2] - edges[i+1] > early_smoothing_error_margin:
         #                 if method[edges[i+1]] == NCAAEExportExport._method.UNDETERMINED:
         #                     j = i+1
         #                     while j < edges.shape[0] - 1:
@@ -738,11 +979,11 @@ class NCAAEExportExport(bpy.types.Operator):
 
 
         #                                 NCAAEExportExport._method.PURE_X_Y):
-        #             if (edges[i+1] - edges[i] <= early_smoothing_frame_margin or \
+        #             if (edges[i+1] - edges[i] <= early_smoothing_error_margin or \
         #                 edges[i+1] - edges[i] == 1 if do_koma_uchi else False) and \
         #                i+1 != edges.shape[0] - 1:
         #                 if not do_koma_uchi and \
-        #                    edges[i+2] - edges[i+1] > early_smoothing_frame_margin:
+        #                    edges[i+2] - edges[i+1] > early_smoothing_error_margin:
         #                     do()
         #                 elif do_koma_uchi
         #             else:
@@ -750,15 +991,15 @@ class NCAAEExportExport(bpy.types.Operator):
             
         
         # else: # not do_koma_uchi
-        #     early_smoothing_frame_margin = 2
+        #     early_smoothing_error_margin = 2
 
         #     for i in range(edges.shape[0] - 1):
         #         if method[edge[i]] in (NCAAEExportExport._method.PURE_X_Y_UNSURE):
 
-        #         if edges[i+1] - edges[i] <= early_smoothing_frame_margin and \
+        #         if edges[i+1] - edges[i] <= early_smoothing_error_margin and \
         #             if i == 0:
         #                 if i+1 != edges.shape[0] - 1:
-        #                     if edges[i+2] - edges[i+1] > early_smoothing_frame_margin:
+        #                     if edges[i+2] - edges[i+1] > early_smoothing_error_margin:
         #                         if method[edges[i]] in (NCAAEExportExport._method.UNDETERMINED, \
         #                                                 NCAAEExportExport._method.SCALE_X_Y_UNSURE, \
         #                                                 NCAAEExportExport._method.SCALE_X_Y) and \
@@ -920,9 +1161,6 @@ class NCAAEExport(bpy.types.Panel):
         
         column = layout.column(heading="Functions")
         column.prop(settings, "do_smoothing")
-        row = column.row()
-        row.enabled = settings.do_smoothing
-        row.prop(settings, "do_predictive_smoothing")
         column.prop(settings, "do_statistics")
         
         column = layout.column(heading="Result")
